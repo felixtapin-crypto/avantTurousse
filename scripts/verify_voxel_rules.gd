@@ -46,6 +46,7 @@ func _initialize() -> void:
 	failures += _check_biomes(map)
 	failures += _check_cache()
 	failures += _check_mesh_carries_materials(map)
+	failures += _check_surface_materials(map)
 
 	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
 	# et manquer sur une autre, et ce n'est pas acceptable — une partie tiree
@@ -408,3 +409,103 @@ func _check_mesh_carries_materials(map: WorldMap) -> int:
 		printerr("  CUSTOM1 entierement nul : aucune matiere ne parvient au shader")
 		return 1
 	return 0
+
+
+# La matiere portee par chaque sommet de surface doit etre celle que la carte
+# annonce pour cette colonne. C'est la promesse que fait l'ecran de
+# generation : ce qu'on y voit doit etre ce qu'on trouvera sur place.
+#
+# Le controle decode CUSTOM1 comme le fait le shader — les quatre indices
+# tiennent dans les octets d'un flottant — et compare au biome de la colonne
+# situee sous le sommet.
+func _check_surface_materials(map: WorldMap) -> int:
+	print("\n--- matiere des sommets de surface ---")
+
+	var generator := TerrainGenerator.new()
+	generator.map = map
+
+	var mesher := VoxelMesherTransvoxel.new()
+	mesher.texturing_mode = VoxelMesherTransvoxel.TEXTURES_MIXEL4_S4
+	mesher.textures_ignore_air_voxels = true
+
+	var matched := 0
+	var total := 0
+	var confusions := {}
+
+	# Plusieurs chunks repartis sur la carte, pour couvrir plusieurs biomes.
+	for sample in 24:
+		var cx := 4 + (sample % 6) * 2
+		var cz := 4 + int(sample / 6.0) * 4
+		var wx := cx * CHUNK + CHUNK / 2
+		var wz := cz * CHUNK + CHUNK / 2
+		if wx >= map.size_xz or wz >= map.size_xz:
+			continue
+		var ground := map.terrain_height(wx, wz)
+		if ground <= WorldMap.SEA_LEVEL:
+			continue
+		@warning_ignore("integer_division")
+		var cy := ground / CHUNK
+
+		var origin := Vector3i(cx * CHUNK, cy * CHUNK, cz * CHUNK)
+		var buffer := VoxelBuffer.new()
+		buffer.create(CHUNK, CHUNK, CHUNK)
+		generator._generate_block(buffer, origin, 0)
+
+		var mesh: ArrayMesh = mesher.build_mesh(buffer, [], {})
+		if mesh == null or mesh.get_surface_count() == 0:
+			continue
+		var arrays := mesh.surface_get_arrays(0)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var custom1: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM1]
+
+		for i in vertices.size():
+			var world := Vector3(origin) + vertices[i]
+			var col_x := floori(world.x)
+			var col_z := floori(world.z)
+			if map.terrain_height(col_x, col_z) <= WorldMap.SEA_LEVEL:
+				continue
+			# Un sommet n'est de surface que s'il est a l'altitude du sol ;
+			# les parois d'une grotte porteraient legitimement de la roche.
+			if absf(world.y - float(map.terrain_height(col_x, col_z))) > 1.5:
+				continue
+
+			var biome := map.biome_at(col_x, col_z)
+			var expected: int = generator.layer_for(map.surface_block(biome))
+			var got := _dominant_layer(custom1[i * 2], custom1[i * 2 + 1])
+
+			total += 1
+			if got == expected:
+				matched += 1
+			else:
+				var key := "%s attendu %d, obtenu %d" % [map.biome_name(biome), expected, got]
+				confusions[key] = int(confusions.get(key, 0)) + 1
+
+	if total == 0:
+		printerr("  aucun sommet de surface echantillonne")
+		return 1
+
+	var rate := 100.0 * float(matched) / float(total)
+	print("  %d sommets de surface, %.1f %% portent la matiere du biome" % [total, rate])
+	var keys := confusions.keys()
+	keys.sort_custom(func(a, b): return confusions[a] > confusions[b])
+	for key in keys.slice(0, 5):
+		print("    %-44s %d sommets" % [key, confusions[key]])
+
+	if rate < 85.0:
+		printerr("  la matiere affichee ne suit pas les biomes")
+		return 1
+	return 0
+
+
+# Indice de la matiere au poids le plus fort, decode comme le fait le shader :
+# quatre indices dans les octets de CUSTOM1.x, quatre poids dans CUSTOM1.y.
+func _dominant_layer(packed_indices: float, packed_weights: float) -> int:
+	var indices := PackedFloat32Array([packed_indices]).to_byte_array()
+	var weights := PackedFloat32Array([packed_weights]).to_byte_array()
+	var best := 0
+	var best_weight := -1
+	for slot in 4:
+		if weights[slot] > best_weight:
+			best_weight = weights[slot]
+			best = indices[slot]
+	return best

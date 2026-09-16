@@ -45,6 +45,17 @@ enum Layer {
 
 const LAYER_COUNT := 8
 
+# Epaisseur, en voxels, de la couche de surface.
+#
+# En terrain lisse elle ne peut PAS faire un seul voxel, contrairement au
+# rendu en blocs. La surface ne tombe pas sur une frontiere de voxel : elle
+# traverse une cellule de Transvoxel, et la matiere du sommet est prise sur
+# les voxels PLEINS de cette cellule. Avec une surface d'un seul voxel, ce
+# sont ceux du dessous qui l'emportent — mesure a l'appui, 61 % seulement des
+# sommets portaient la bonne matiere, les prairies sortaient en terre et les
+# sommets enneiges en roche.
+const SURFACE_SKIN := 2
+
 # Poids « une seule matiere » : la premiere a 100 %, les autres a zero. Le
 # melange entre matieres voisines vient alors de l'interpolation des sommets
 # faite par le mailleur, ce qui suffit pour une transition propre.
@@ -98,8 +109,8 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 			var top := map.terrain_height(wx, wz)
 			var biome := map.biome_at(wx, wz)
 			var strata := map.sub_surface(biome)
-			var surface_layer := _layer_for(map.surface_block(biome))
-			var sub_layer := _layer_for(strata.x)
+			var surface_layer := layer_for(map.surface_block(biome))
+			var sub_layer := layer_for(strata.x)
 			var sub_depth: int = strata.y
 
 			for y in bs.y:
@@ -119,13 +130,19 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 
 				buffer.set_voxel_f(clampf(sdf / 8.0, -1.0, 1.0), x, y, z, SDF_CHANNEL)
 
+				# La couche de surface est testee AVANT la stratification :
+				# sans ca, un biome dont le sous-sol est directement de la
+				# roche (la neige, par exemple) n'aurait aucune epaisseur de
+				# surface et ressortirait en pierre.
 				var layer := surface_layer
 				if wy < WorldMap.BEDROCK_DEPTH:
 					layer = Layer.STONE_DARK
-				elif depth > sub_depth:
-					layer = Layer.STONE
-				elif depth > 0:
+				elif depth <= SURFACE_SKIN:
+					layer = surface_layer
+				elif depth <= sub_depth:
 					layer = sub_layer
+				else:
+					layer = Layer.STONE
 				_set_material(buffer, x, y, z, layer)
 
 	buffer.compress_uniform_channels()
@@ -142,7 +159,7 @@ func _set_material(buffer: VoxelBuffer, x: int, y: int, z: int, layer: int) -> v
 	buffer.set_voxel(_encoded_weights, x, y, z, WEIGHTS_CHANNEL)
 
 
-func _layer_for(block_type: int) -> int:
+func layer_for(block_type: int) -> int:
 	match block_type:
 		TerrainMaterials.Type.GRASS: return Layer.GRASS
 		TerrainMaterials.Type.DIRT: return Layer.DIRT
