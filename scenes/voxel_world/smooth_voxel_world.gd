@@ -139,6 +139,7 @@ func _terrain_material() -> ShaderMaterial:
 	material.shader = load("res://scenes/voxel_world/smooth_terrain.gdshader")
 	material.set_shader_parameter("u_albedo_array", TerrainTextures.albedo_array())
 	material.set_shader_parameter("u_normal_array", TerrainTextures.normal_array())
+	material.set_shader_parameter("u_height_array", TerrainTextures.height_array())
 	# L'echelle est donnee PAR MATIERE, en metres reels : les textures vont de
 	# 1,4 m a 3,5 m de cote, donc une repetition unique les ferait paraitre
 	# deux fois et demie differentes les unes des autres.

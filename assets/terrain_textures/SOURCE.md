@@ -11,11 +11,32 @@ compris commercial, sans attribution obligatoire.
 | 3 | `stone_dark` | [Rock035](https://ambientcg.com/view?id=Rock035) |
 | 4 | `sand` | [Ground057](https://ambientcg.com/view?id=Ground057) |
 | 5 | `sand_pale` | [Ground054](https://ambientcg.com/view?id=Ground054) |
-| 6 | `gravel` | [Gravel022](https://ambientcg.com/view?id=Gravel022) |
+| 6 | `gravel` | [Ground108](https://ambientcg.com/view?id=Ground108) |
 | 7 | `snow` | [Snow006](https://ambientcg.com/view?id=Snow006) |
 
 L'index est celui de `TerrainGenerator.Layer` : c'est un contrat avec le
 shader, pas un ordre d'affichage.
+
+## Comment les chercher
+
+La recherche d'ambientCG porte sur les **tags**, pas sur le sens. Les mots du
+vocabulaire du relief n'y renvoient rien du tout : `scree`, `talus`, `shale`,
+`pebbles`, `rocky ground` donnent zéro résultat. Les tags productifs sont
+`rubble`, `debris`, `riverbed`, `scattered`, `uneven`.
+
+C'est ce qui explique le premier choix de `gravel`, **Gravel022** : un tapis
+dense et régulier de gravillons, c'est-à-dire du béton désactivé de trottoir.
+Il ne partageait aucune teinte avec la terre ou la pierre qui l'entourent, et
+c'est ce manque de recouvrement — plus que le mélange lui-même — qui faisait
+ressortir la moindre limite de biome.
+
+**Ground108** le remplace : minéral, à fragments de tailles variées, dans le
+même brun-gris que `dirt`. La couche sert à trois choses à la fois (fond de
+mer profonde, lit de rivière, éboulis), d'où le choix d'une matière tagguée
+`riverbed` **et** `rubble`.
+
+L'import se fait avec `scripts/import_texture.gd`, qui applique les qualités
+d'encodage ci-dessous et recalcule la rugosité moyenne.
 
 ## Ce qui est versionné
 

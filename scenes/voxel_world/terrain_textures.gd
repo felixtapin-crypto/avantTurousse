@@ -33,7 +33,7 @@ const METERS: Array[float] = [
 	2.5,  # stone_dark — Rock035, estime
 	1.5,  # sand       — Ground057, estime
 	3.5,  # sand_pale  — Ground054, mesure
-	1.5,  # gravel     — Gravel022, mesure
+	1.5,  # gravel     — Ground108, mesure
 	2.5,  # snow       — Snow006, mesure
 ]
 
@@ -51,7 +51,7 @@ const ROUGHNESS: Array[float] = [
 	0.69,  # stone_dark
 	0.45,  # sand
 	0.67,  # sand_pale
-	0.46,  # gravel
+	0.52,  # gravel
 	0.51,  # snow
 ]
 
@@ -62,6 +62,13 @@ static func albedo_array() -> Texture2DArray:
 
 static func normal_array() -> Texture2DArray:
 	return _array("normal")
+
+
+# Hauteurs (carte `Displacement` d'ambientCG). Elles ne deplacent aucun sommet :
+# elles servent a departager deux matieres qui se recouvrent, pour que la plus
+# haute perce l'autre au lieu de se fondre avec elle.
+static func height_array() -> Texture2DArray:
+	return _array("height")
 
 
 static func _array(suffix: String) -> Texture2DArray:
