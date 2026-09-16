@@ -56,6 +56,17 @@ var _play_button: Button
 var _cache_label: Label
 
 
+# F10 ferme le jeu depuis l ecran de carte aussi : c est le premier ecran, donc
+# celui ou l on se trouve quand on veut simplement partir.
+#
+# Pas sur Echap : la saisie de graine est un LineEdit, et Echap y est le geste
+# courant pour abandonner une saisie.
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.is_pressed() and not event.is_echo():
+		if (event as InputEventKey).keycode == KEY_F10:
+			get_tree().quit()
+
+
 func _ready() -> void:
 	_build_ui()
 	_regenerate()

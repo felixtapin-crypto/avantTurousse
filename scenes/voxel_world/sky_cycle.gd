@@ -66,6 +66,27 @@ const FOG_AERIAL := 0.85
 const FOG_SUN_SCATTER := 0.30
 const FOG_SKY_AFFECT := 0.8
 
+# --- Sous terre ---
+#
+# L'ambiante de Godot est OMNIDIRECTIONNELLE et n'est occultee par rien. Une
+# galerie a cinquante metres sous la roche recoit donc exactement la meme que
+# la plage — teinte chaude du couchant comprise. C'est ce qu'on voyait dans les
+# grottes, et ce n'est pas un bug d'eclairage : c'est la definition d'une
+# lumiere ambiante sans occlusion.
+#
+# Le brouillard s'y ajoute, et pour la meme raison. `fog_aerial_perspective`
+# prend la couleur du CIEL selon la direction du regard : sous terre, il repeint
+# le fond du tunnel en bleu de plein jour.
+#
+# Le soleil, lui, n'est PAS attenue : la roche l'occulte deja par les ombres, et
+# l'eteindre assombrirait la vue vers l'exterieur depuis une entree.
+const CAVE_AMBIENT := Color(0.035, 0.038, 0.050)
+const CAVE_FOG := Color(0.020, 0.020, 0.028)
+
+# 0 en surface, 1 des qu'on est franchement sous terre. Renseigne par la scene,
+# qui seule connait la position du joueur.
+var underground := 0.0
+
 # 0.0 = minuit, 0.25 = aube, 0.5 = midi, 0.75 = crepuscule.
 var time_of_day := 0.30
 var day_length_seconds := 900.0
@@ -155,12 +176,24 @@ func apply() -> void:
 	# quand le ciel est encore clair mais le soleil direct deja eteint.
 	var ambient := NIGHT_AMBIENT.lerp(AMBIENT_DAY, sky_light)
 	ambient = ambient.lerp(AMBIENT_DUSK, sky_light * (1.0 - day) * 0.5)
-	_environment.ambient_light_color = ambient
 
 	# Le brouillard suit le meme mouvement : le voile clair du jour flotterait
 	# sur une scene nocturne sombre.
-	_environment.fog_light_color = NIGHT_FOG.lerp(HORIZON, sky_light)
-	_environment.fog_density = lerpf(FOG_DENSITY * 0.5, FOG_DENSITY, sky_light)
+	var fog := NIGHT_FOG.lerp(HORIZON, sky_light)
+	var density := lerpf(FOG_DENSITY * 0.5, FOG_DENSITY, sky_light)
+
+	# Sous terre, on coupe tout ce que la roche ne peut pas occulter. Voir la
+	# note en tete : ambiante et perspective aerienne traversent la pierre.
+	var cave := clampf(underground, 0.0, 1.0)
+	ambient = ambient.lerp(CAVE_AMBIENT, cave)
+	fog = fog.lerp(CAVE_FOG, cave)
+	density *= 1.0 - cave * 0.85
+
+	_environment.ambient_light_color = ambient
+	_environment.fog_light_color = fog
+	_environment.fog_density = density
+	_environment.fog_aerial_perspective = FOG_AERIAL * (1.0 - cave)
+	_environment.fog_sky_affect = FOG_SKY_AFFECT * (1.0 - cave)
 
 
 # Les trois astres. L'ordre de creation fixe leur indice LIGHT dans le shader.

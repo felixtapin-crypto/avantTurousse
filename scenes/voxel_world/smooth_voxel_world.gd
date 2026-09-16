@@ -33,7 +33,7 @@ var _sea: Sea
 
 
 func _ready() -> void:
-	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris"
+	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris · M nouvelle carte · F10 quitter"
 	status_label.text = "Calcul de la carte..."
 
 	# Reglages venus de l'ecran d'apercu, si la partie est passee par lui.
@@ -159,6 +159,28 @@ func _terrain_material() -> ShaderMaterial:
 	return material
 
 
+# Sortie du monde : retour a l'ecran de carte, ou fermeture.
+#
+# Ni l'un ni l'autre n'est sur Echap, qui sert deja a rendre la souris — et
+# c'est justement la touche qu'on presse quand on est perdu. Lui donner en plus
+# la fermeture du jeu ferait quitter une partie a chacun de ces reflexes.
+#
+# `M` repasse par l'ecran de configuration, donc par le CACHE : revenir sur la
+# meme graine et la meme taille ne recalcule rien.
+func _unhandled_input(event: InputEvent) -> void:
+	if not event.is_pressed() or event.is_echo():
+		return
+	if not (event is InputEventKey):
+		return
+
+	match (event as InputEventKey).keycode:
+		KEY_M:
+			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+			get_tree().change_scene_to_file("res://scenes/voxel_world/map_preview.tscn")
+		KEY_F10:
+			get_tree().quit()
+
+
 func _on_edit_refused(reason: String) -> void:
 	_message = reason
 	_message_timer = MESSAGE_DURATION
@@ -167,6 +189,15 @@ func _on_edit_refused(reason: String) -> void:
 func _process(delta: float) -> void:
 	if map == null:
 		return
+
+	# Profondeur sous le sol, qui pilote l'ambiance souterraine. Voir la note
+	# en tete de SkyCycle : l'ambiante et la perspective aerienne traversent la
+	# roche, et c'est le seul moyen de les eteindre dans une galerie.
+	if _sky != null:
+		var ground := map.terrain_height(
+			floori(player.position.x), floori(player.position.z))
+		_sky.underground = smoothstep(0.0, 6.0, float(ground) - player.position.y)
+
 	if _message_timer > 0.0:
 		_message_timer -= delta
 		status_label.text = _message

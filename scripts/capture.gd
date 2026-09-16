@@ -33,17 +33,29 @@ func _initialize() -> void:
 		WorldSettings.day_length_seconds = 1.0e9
 	var pitch: float = float(args[4]) if args.size() > 4 else NAN
 	var yaw: float = float(args[5]) if args.size() > 5 else 0.0
+	# Position de depart, "x,y,z". Elle est posee AVANT l attente, pour que le
+	# streaming remplisse le terrain autour du point vise et non autour du point
+	# d apparition — c est le seul moyen de capturer l interieur d une grotte.
+	var spawn: String = args[6] if args.size() > 6 else ""
 
 	var packed := load(scene_path)
 	if packed == null:
 		printerr("scene introuvable : %s" % scene_path)
 		quit(1)
 		return
-	root.add_child(packed.instantiate())
-	_capture(delay, out_path, pitch, yaw)
+	var instance: Node = packed.instantiate()
+	root.add_child(instance)
+	_capture(delay, out_path, pitch, yaw, instance, spawn)
 
 
-func _capture(delay: float, out_path: String, pitch: float, yaw: float) -> void:
+func _capture(delay: float, out_path: String, pitch: float, yaw: float,
+		scene_root: Node, spawn: String) -> void:
+	# Deux images d attente : la scene pose le joueur dans son `_ready`, et il
+	# n est pas encore dans l arbre au retour d `add_child`.
+	await process_frame
+	await process_frame
+	if spawn != "":
+		_place(scene_root, spawn)
 	await create_timer(delay).timeout
 	# L'orientation est posee APRES l'attente : le joueur reprend la main sur sa
 	# camera des qu'il recoit une entree, et rien ne garantit qu'il n'ait pas
@@ -72,3 +84,18 @@ func _aim(pitch: float, yaw: float) -> void:
 		return
 	var camera := cameras[0] as Camera3D
 	camera.global_rotation = Vector3(deg_to_rad(pitch), deg_to_rad(yaw), 0.0)
+
+
+# Deplace le joueur. La scene l'a deja pose dans son `_ready`, appele par
+# `add_child` : on ecrase donc sa position juste apres.
+func _place(scene_root: Node, spec: String) -> void:
+	var parts := spec.split(",")
+	if parts.size() != 3:
+		printerr("position attendue sous la forme x,y,z")
+		return
+	var bodies := scene_root.find_children("*", "CharacterBody3D", true, false)
+	if bodies.is_empty():
+		printerr("aucun CharacterBody3D a deplacer")
+		return
+	(bodies[0] as Node3D).global_position = Vector3(
+		float(parts[0]), float(parts[1]), float(parts[2]))
