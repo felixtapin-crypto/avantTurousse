@@ -16,6 +16,10 @@ extends Node3D
 @onready var status_label: Label = $Hud/StatusLabel
 @onready var help_label: Label = $Hud/HelpLabel
 
+var _exit_bar: Control
+var _exit_fill: ColorRect
+var _exit_label: Label
+
 @export var world_seed: int = 1
 @export var map_size: int = 600
 @export var map_height: int = 64
@@ -47,6 +51,7 @@ var _sea: Sea
 func _ready() -> void:
 	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris · M nouvelle carte · F10 quitter"
 	status_label.text = "Calcul de la carte..."
+	_build_exit_bar()
 
 	# Reglages venus de l'ecran d'apercu, si la partie est passee par lui.
 	world_seed = WorldSettings.seed_value
@@ -201,20 +206,102 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_tree().quit()
 
 
-# Demonter le terrain fige la fenetre plusieurs secondes : liberer un
-# VoxelTerrain attend que sa file de generation se vide, et rien ne permet de
-# l'annuler depuis GDScript. On l'a ramenee de deux minutes a une dizaine de
-# secondes (voir `scripts/probe_teardown.gd`), mais elle ne disparaitra pas
-# tant que la generation restera en GDScript.
+# Vide la file de generation AVANT de demonter le terrain, en affichant
+# l'avancement.
 #
-# Le message est donc affiche AVANT, avec une image pour qu'il soit peint : un
-# gel annonce se supporte, un gel muet passe pour un plantage.
+# Liberer un VoxelTerrain attend que sa file se vide, et rien ne permet de
+# l'annuler depuis GDScript. Fait pendant `free()`, cette attente est un gel
+# muet : aucune image n'est dessinee, donc aucune barre ne pourrait avancer.
+#
+# On attend donc AVANT, image par image. La file ne se remplit plus une fois le
+# spectateur retire, `VoxelEngine.get_stats()` dit combien il en reste, et la
+# meme attente devient une barre qui progresse. Le `free()` qui suit ne trouve
+# plus rien a attendre.
 func _announce_exit(message: String) -> void:
 	set_process(false)
-	status_label.text = message
-	help_label.text = "Le terrain se demonte — quelques secondes."
+	_exit_bar.visible = true
+	_exit_label.text = message
+
+	# Couper la DEMANDE avant de compter : sans spectateur, plus aucun bloc
+	# n'est reclame et la file ne fait plus que decroitre.
+	for viewer in find_children("*", "VoxelViewer", true, false):
+		(viewer as Node).queue_free()
+	if terrain != null:
+		terrain.max_view_distance = 16
 	await get_tree().process_frame
+
+	var initial := maxi(_pending_voxel_tasks(), 1)
+	while true:
+		var remaining := _pending_voxel_tasks()
+		if remaining <= 0:
+			break
+		var done := 1.0 - float(remaining) / float(maxi(initial, remaining))
+		_exit_bar.visible = true
+		_exit_label.text = "%s
+%d blocs a ranger" % [message, remaining]
+		_exit_fill.anchor_right = clampf(done, 0.0, 1.0)
+		await get_tree().process_frame
+
 	await get_tree().process_frame
+
+
+# Taches de generation et de maillage encore en attente, tous terrains
+# confondus. C'est ce compteur qu'attend la destruction du terrain.
+func _pending_voxel_tasks() -> int:
+	var tasks: Dictionary = VoxelEngine.get_stats().get("tasks", {})
+	return int(tasks.get("generation", 0)) + int(tasks.get("meshing", 0))
+
+
+# Voile de transition : fond plein, message, barre. Palette de l'ecran de
+# carte, pour que les deux ecrans se repondent.
+#
+# Il COUVRE la vue, et ce n'est pas qu'une question de gout. Vider la file
+# suppose de couper la demande de blocs, ce qui decharge aussi ceux qui sont
+# affiches : sans voile, on regarde l'ile s'effacer pendant dix secondes, ce
+# qui se lit comme une panne et non comme un depart.
+func _build_exit_bar() -> void:
+	_exit_bar = Control.new()
+	_exit_bar.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_exit_bar.visible = false
+
+	var veil := ColorRect.new()
+	veil.color = Color("#0b1a1f")
+	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_exit_bar.add_child(veil)
+
+	# Centrage par CONTENEUR et non par ancres calculees : le libelle fait une
+	# ou deux lignes selon l'etape, et des decalages fixes le faisaient
+	# chevaucher la barre des qu'il en gagnait une.
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_exit_bar.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	center.add_child(box)
+
+	_exit_label = Label.new()
+	_exit_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_exit_label.add_theme_font_size_override("font_size", 18)
+	_exit_label.add_theme_color_override("font_color", Color("#f0e6d2"))
+	box.add_child(_exit_label)
+
+	var track := Control.new()
+	track.custom_minimum_size = Vector2(340, 4)
+
+	var groove := ColorRect.new()
+	groove.color = Color(1, 1, 1, 0.14)
+	groove.set_anchors_preset(Control.PRESET_FULL_RECT)
+	track.add_child(groove)
+
+	_exit_fill = ColorRect.new()
+	_exit_fill.color = Color("#e0a542")
+	_exit_fill.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_exit_fill.anchor_right = 0.0
+	track.add_child(_exit_fill)
+
+	box.add_child(track)
+	$Hud.add_child(_exit_bar)
 
 
 func _on_edit_refused(reason: String) -> void:
