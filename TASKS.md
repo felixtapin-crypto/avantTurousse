@@ -55,6 +55,52 @@ même temps sans se prévenir) : les scènes `.tscn` (fusion textuelle mais
 casse-tête à relire), `project.godot`, et tout futur fichier de format de
 sauvegarde.
 
+## Convention de messages de commit
+
+Les messages de commit suivent
+[Conventional Commits](https://www.conventionalcommits.org/fr/v1.0.0/) :
+
+```
+<type>(<portée facultative>): <description>
+```
+
+| Type | Quand l'utiliser |
+|------|------------------|
+| `feat` | nouvelle fonctionnalité de jeu |
+| `fix` | correction de bug |
+| `perf` | optimisation, comportement inchangé |
+| `refactor` | réorganisation du code, comportement inchangé |
+| `docs` | `DESIGN.md`, `TASKS.md`, `README.md` |
+| `chore` | outillage, `.gitignore`, configuration du projet |
+| `test` | ajout ou correction de tests |
+
+Portées qui collent au découpage actuel du dépôt : `voxel`, `world`,
+`player`, `network`, `ui`, `assets`, `design`.
+
+```
+feat(voxel): add chunked mesher emitting only exposed faces
+fix(network): send the world seed to the client before loading the world
+perf(world): remesh only the chunk touched by a dig
+docs(design): settle the voxel art style
+```
+
+Deux précisions pour éviter les faux débats :
+
+- **Les descriptions restent en anglais**, comme tout l'historique existant.
+  Seul le préfixe de type est nouveau — la documentation du projet, elle,
+  reste en français.
+- **L'historique antérieur n'est pas réécrit.** Les commits d'avant cette
+  règle sont des messages descriptifs sans préfixe, et c'est très bien ainsi.
+
+Un changement cassant se note `feat(voxel)!:`, ou avec un bloc
+`BREAKING CHANGE:` dans le corps du message. C'est surtout utile ici pour le
+format de sauvegarde et le protocole réseau, puisque ça oblige l'autre à
+régénérer sa sauvegarde ou à se mettre à jour avant de pouvoir rejouer
+ensemble.
+
+**Le titre de la Pull Request suit la même convention** : c'est lui qui
+devient le message de commit si la PR est mergée en squash.
+
 ## Historique (avant la migration vers le Project)
 
 Gardé pour mémoire — les entrées ci-dessous ne seront plus mises à jour ;
