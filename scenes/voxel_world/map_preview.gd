@@ -80,8 +80,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif (event as InputEventKey).keycode == KEY_ESCAPE and not _seed_edit.has_focus():
 			# Echap revient au menu, SAUF pendant une saisie de graine : la, il
 			# sert deja a abandonner ce qu on tape.
-			_cancel_pending()
-			get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn")
+			_back_to_menu()
 
 
 func _ready() -> void:
@@ -142,6 +141,15 @@ func _build_map_column() -> Control:
 	column.add_theme_constant_override("separation", 14)
 
 	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+
+	# Le retour est dans l EN-TETE, a gauche, la ou on cherche une navigation.
+	# Il a d abord ete pose a cote de "Au hasard", ou il se lisait comme une
+	# action sur la graine et non comme une sortie d ecran.
+	var back := _pill("← Retour aux mondes")
+	back.pressed.connect(_back_to_menu)
+	header.add_child(back)
+
 	header.add_child(_label("AVANT TOUROUSSE", 13, Color(INK, 0.45)))
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -213,11 +221,6 @@ func _build_side_column() -> Control:
 
 	var seed_row := HBoxContainer.new()
 	seed_row.add_theme_constant_override("separation", 6)
-	var back := _pill("Retour")
-	back.pressed.connect(func():
-		_cancel_pending()
-		get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn"))
-	seed_row.add_child(back)
 	var reroll := _pill("Au hasard")
 	reroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reroll.pressed.connect(_on_reroll)
@@ -667,3 +670,10 @@ func _select_start_hour(index: int) -> void:
 	WorldSettings.start_time_of_day = START_HOURS[index]
 	for i in _hour_buttons.size():
 		_mark_selected(_hour_buttons[i], i == index)
+
+
+# Retour au menu des mondes. Le calcul en cours est abandonne : la carte serait
+# jetee de toute facon, et le laisser tourner ferait attendre le menu.
+func _back_to_menu() -> void:
+	_cancel_pending()
+	get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn")
