@@ -76,3 +76,8 @@ tâches plus petites au fur et à mesure :
   seul cote (`backface_collision`), et c'etait le mauvais. Force a `true`
   dans `platform.gd`. Ajout au passage de parois de falaise sur le
   pourtour de l'ile (donne du volume, plus juste un feuillet plat).
+- 2026-09-16 — Meme cause plus loin : le sens des triangles du sol
+  donnait aussi la mauvaise face visible depuis le dessus (on voyait le
+  dessous du terrain). Sens inverse dans `Platform._add_quad`, et
+  `cull_mode = CULL_DISABLED` sur le materiau pour ne plus avoir a se
+  soucier du sens exact des 4 orientations de parois de falaise.
