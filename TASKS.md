@@ -45,14 +45,21 @@ tâches plus petites au fur et à mesure :
 - [ ] Vraie grille de voxels 3D (grottes naturelles, structures avec un
   toit separe du sol) — le systeme actuel ne fait que monter/descendre la
   hauteur d'une colonne, pas de veritable volume
-- [ ] Jour/nuit et meteo : passer sur une horloge/etat faisant autorite
-  cote hote (avec sync reseau) le jour ou ça doit influer sur des jauges
-  de survie partagees, OU des qu'on affiche l'heure explicitement a
-  l'ecran (voir le gabarit "L'horloge" dans DESIGN.md) — pour l'instant
+- [ ] Jour/nuit : maintenant que l'horloge (gabarit "L'horloge" dans
+  DESIGN.md, implementee) affiche l'heure explicitement a l'ecran une fois
+  trouvee, ce n'est plus purement cosmetique — passer sur une horloge
+  faisant autorite cote hote (avec sync reseau) devient plus important
+  qu'avant, pour eviter que les deux joueurs lisent une heure legerement
+  differente. Pour l'instant
   chaque pair calcule independamment (voir `day_night_cycle.gd` et
   `World.is_raining`), ce qui est correct seulement tant que c'est
   purement cosmetique/pas affiche comme une donnee fiable au joueur
 - [ ] Meteo : faire reagir les nuages (plus denses/sombres quand il pleut)
+- [ ] Generaliser `Collectible` : pour l'instant code en dur pour
+  l'horloge (un seul type d'artefact) — a parametrer (type + effet) des
+  qu'un deuxieme gabarit d'enigme arrive
+- [ ] Vrai systeme d'indices/repères nommés (voir DESIGN.md) : l'horloge
+  se trouve aujourd'hui juste en explorant, sans indice textuel genere
 - [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
 - [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler
 - [ ] Construction d'abri (pose de blocs)
@@ -127,3 +134,8 @@ tâches plus petites au fur et à mesure :
   est calcule independamment par chaque pair pour l'instant — voir la
   tache "faire autorite cote hote" ci-dessus si ça doit un jour toucher
   des jauges de survie partagees.
+- 2026-09-16 — Vegetation (~60 arbres proceduraux) + premier vrai gabarit
+  d'enigme jouable : l'horloge est cachee au pied d'un arbre choisi de
+  facon deterministe (meme foret, meme arbre chez les deux joueurs, sans
+  reseau), ramassable par clic, debloque l'affichage de l'heure pour toute
+  l'equipe des qu'un joueur la trouve. Voir `vegetation.gd`, `collectible.gd`.
