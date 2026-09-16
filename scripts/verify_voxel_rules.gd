@@ -47,6 +47,7 @@ func _initialize() -> void:
 	failures += _check_cache()
 	failures += _check_mesh_carries_materials(map)
 	failures += _check_surface_materials(map)
+	failures += _check_caves(map)
 
 	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
 	# et manquer sur une autre, et ce n'est pas acceptable — une partie tiree
@@ -567,3 +568,70 @@ func _dominant_layer(packed_indices: float, packed_weights: float) -> int:
 			best_weight = weights[slot]
 			best = indices[slot]
 	return best
+
+
+# Le reseau de grottes doit etre ACCESSIBLE, connexe, et sec.
+#
+# Les trois se verifient parce que les trois ont deja manque. Le systeme
+# precedent — un bruit 3D — produisait des cavites correctes et parfaitement
+# inutiles : la marge qui l'empechait d'ouvrir des trous beants lui interdisait
+# toute entree, si bien qu'aucune n'etait atteignable. Rien ne le signalait.
+#
+# L'ouverture est controlee EN PASSANT PAR LE GENERATEUR, pas en relisant le
+# reseau : c'est le seul moyen de savoir que le trou existe vraiment dans les
+# voxels, et pas seulement dans la geometrie qui a servi a les calculer.
+func _check_caves(map: WorldMap) -> int:
+	print("\n--- reseau de grottes ---")
+	var rooms := map.cave_rooms()
+	var entrances := map.cave_entrances()
+	print("  %d salles, %d galeries elementaires, %d entrees"
+		% [rooms.size(), map.cave_capsule_count(), entrances.size()])
+
+	var failures := 0
+	if rooms.size() < 4 or entrances.is_empty():
+		printerr("  reseau trop pauvre pour etre explorable")
+		return 1
+
+	var lost := map.caves.unreachable_rooms()
+	if lost > 0:
+		printerr("  %d salle(s) qu'aucune entree n'atteint" % lost)
+		failures += 1
+	else:
+		print("  toutes les salles sont reliees a une entree")
+
+	# Aucune galerie ne doit passer sous la mer : on n'y simule aucun
+	# ecoulement, donc une breche noierait le reseau sans que rien ne le dise.
+	var flooded := 0
+	for room in rooms:
+		if map.terrain_height(int(room.x), int(room.z)) <= WorldMap.SEA_LEVEL:
+			flooded += 1
+	if flooded > 0:
+		printerr("  %d salle(s) sous le niveau de la mer" % flooded)
+		failures += 1
+
+	# Ouverture reelle, mesuree dans les voxels produits par le generateur.
+	var generator := TerrainGenerator.new()
+	generator.map = map
+	var opened := 0
+	for entrance in entrances:
+		if map.terrain_height(entrance.x, entrance.z) <= WorldMap.SEA_LEVEL:
+			printerr("  une entree debouche sous la mer en %v" % entrance)
+			failures += 1
+			continue
+		# Un vide dans les quelques voxels sous la bouche suffit : c'est ce que
+		# le joueur franchit.
+		var origin := Vector3i(entrance.x - 8, entrance.y - 12, entrance.z - 8)
+		var buffer := VoxelBuffer.new()
+		buffer.create(16, 16, 16)
+		generator._generate_block(buffer, origin, 0)
+		for y in 16:
+			if buffer.get_voxel_f(8, y, 8, VoxelBuffer.CHANNEL_SDF) > 0.0 \
+					and origin.y + y < map.terrain_height(entrance.x, entrance.z):
+				opened += 1
+				break
+
+	print("  %d entrees sur %d ouvrent reellement un vide" % [opened, entrances.size()])
+	if opened == 0:
+		printerr("  aucune entree n'est praticable : les grottes sont introuvables")
+		failures += 1
+	return failures

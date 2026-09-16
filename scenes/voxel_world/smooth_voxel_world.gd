@@ -83,6 +83,14 @@ func _ready() -> void:
 	_add_sea()
 
 	status_label.text = "Carte calculee en %d ms — streaming en cours..." % map_ms
+	# Les entrees de grottes sont annoncees dans la console : sans leurs
+	# coordonnees elles sont introuvables sur une ile de plusieurs centaines de
+	# metres, et c'est exactement le defaut qui rendait les anciennes grottes
+	# inutiles. A remplacer par un vrai repere en jeu (voir issue #8).
+	var entrances := map.cave_entrances()
+	print("%d salles, %d entrees de grotte :" % [map.cave_rooms().size(), entrances.size()])
+	for entrance in entrances:
+		print("  entree en x=%d y=%d z=%d" % [entrance.x, entrance.y, entrance.z])
 
 
 # En lisse, l'eau ne peut pas etre un voxel : la surface d'isovaleur est

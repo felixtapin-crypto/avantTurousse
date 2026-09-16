@@ -211,16 +211,15 @@ const SAND_DEPTH := 3
 const DESERT_SAND_DEPTH := 6
 
 # --- Grottes ---------------------------------------------------------------
-const CAVE_THRESHOLD := 0.42
-# Marge sous la surface en-deca de laquelle on ne creuse pas : evite que les
-# grottes ouvrent des trous beants dans le sol, et garantit qu'une galerie
-# sous le fond marin ne debouche jamais dans la mer — ce qui inonderait une
-# galerie alors qu'on ne simule aucun ecoulement.
-const CAVE_SURFACE_MARGIN := 4
-# Profondeur au-dela de laquelle on cesse de creuser. Les voxels tres
-# profonds ne sont ni visibles ni atteints en pratique, et c'est l'appel au
-# bruit 3D qui domine le cout de la generation.
-const CAVE_MAX_DEPTH := 24
+#
+# Le bruit 3D d'origine a ete remplace par un vrai reseau : des salles reliees
+# par des galeries, avec des entrees. Voir `cave_network.gd`, qui explique
+# pourquoi il est EVALUE et non creuse.
+#
+# Ce qui a decide du remplacement : le bruit ne pouvait pas avoir d'entrees. La
+# marge sous la surface qui l'empechait d'ouvrir des trous beants lui
+# interdisait du meme coup toute ouverture, et les grottes existaient donc sans
+# que le joueur puisse jamais en trouver une.
 
 enum Biome {
 	DEEP_SEA,
@@ -250,7 +249,10 @@ var _temperature: PackedFloat32Array
 var _moisture: PackedFloat32Array
 var _shadow: PackedFloat32Array     # ombre pluviometrique, 0 au vent, 1 sous le vent
 var _biomes: PackedByteArray
-var _cave_noise := FastNoiseLite.new()
+# Reseau de grottes. Redérive de la graine, jamais stocke : c est la meme
+# politique que le bruit qu il remplace, et elle est ce qui rend le monde
+# gratuit a sauvegarder.
+var caves: CaveNetwork = CaveNetwork.new()
 var _min_height := 0
 var _max_height := 0
 
@@ -294,12 +296,6 @@ func height_range() -> Vector2i:
 # d'echantillonnage, donc l'appel est sur depuis plusieurs threads — a la
 # difference d'un Curve, qui se cuit paresseusement et plante dans ce cas
 # (piege documente dans les demos de godot_voxel).
-func is_cave(x: int, y: int, z: int, depth: int) -> bool:
-	if depth <= CAVE_SURFACE_MARGIN or depth >= CAVE_MAX_DEPTH:
-		return false
-	return _cave_noise.get_noise_3d(float(x), float(y), float(z)) > CAVE_THRESHOLD
-
-
 # Altitude du sol en flottant, avant arrondi a l'entier.
 #
 # Le rendu en blocs n'a besoin que de l'entier, mais le rendu lisse construit
@@ -312,17 +308,51 @@ func terrain_height_f(x: int, z: int) -> float:
 	return _height_f[z * size_xz + x]
 
 
-# Version continue du creusement, pour le rendu lisse.
+# Capsules du reseau susceptibles de concerner une colonne.
 #
-# `is_cave()` renvoie un booleen, ce qui convient a une grille de blocs mais
-# donnerait des parois en escalier une fois lissees. Ici on rend la marge au
-# seuil : positive dans le vide, negative dans la roche, et d'autant plus
-# grande qu'on est loin de la paroi. Tres negatif hors de la bande creusable,
-# pour que la grotte n'ait aucun effet la ou elle n'existe pas.
-func cave_sdf(x: int, y: int, z: int, depth: int) -> float:
-	if depth <= CAVE_SURFACE_MARGIN or depth >= CAVE_MAX_DEPTH:
-		return -1000.0
-	return (_cave_noise.get_noise_3d(float(x), float(y), float(z)) - CAVE_THRESHOLD) * 8.0
+# Le generateur la demande UNE fois par colonne, puis la reutilise pour tous
+# les voxels de celle-ci : la recherche par case est un acces de dictionnaire,
+# bien trop cher pour etre refait a chaque voxel.
+func cave_column(x: int, z: int) -> PackedInt32Array:
+	return caves.column(x, z)
+
+
+# Distance signee au vide de la grotte : positive dedans, negative dans la
+# roche. Le generateur en prend le MAXIMUM avec la distance au terrain, ce qui
+# creuse.
+func cave_sdf_in(indices: PackedInt32Array, x: int, y: int, z: int) -> float:
+	return caves.sdf_in(indices, x, y, z)
+
+
+func cave_sdf(x: int, y: int, z: int) -> float:
+	return caves.sdf(x, y, z)
+
+
+# Bande d'altitudes concernee par ces capsules, pour ne pas tester le reseau
+# sur toute la hauteur d'un chunk.
+# Accesseurs du reseau, pour l apercu et les controles.
+func cave_rooms() -> Array[Vector4]:
+	return caves.rooms
+
+
+func cave_entrances() -> Array[Vector3i]:
+	return caves.entrances
+
+
+func cave_capsule_count() -> int:
+	return caves.capsule_count()
+
+
+func cave_y_bounds(indices: PackedInt32Array) -> Vector2i:
+	return caves.y_bounds(indices)
+
+
+# Le reseau touche-t-il ce pave ? Permet de remplir d'un bloc les chunks
+# souterrains qu'aucune galerie ne traverse.
+func caves_touch(origin: Vector3i, extent: Vector3i) -> bool:
+	return caves.touches(
+		origin.x, origin.z, origin.x + extent.x, origin.z + extent.z,
+		origin.y, origin.y + extent.y)
 
 func terrain_height(x: int, z: int) -> int:
 	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
@@ -396,7 +426,6 @@ func biome_name(biome: int) -> String:
 # constante compilee — voir issue #31.
 func generate(seed_value: int) -> void:
 	seed_used = seed_value
-	_prepare_cave_noise(seed_value)
 
 	_build_base_relief(seed_value)
 	_apply_hydrology()
@@ -408,6 +437,11 @@ func generate(seed_value: int) -> void:
 	for h in _heights:
 		_min_height = mini(_min_height, h)
 		_max_height = maxi(_max_height, h)
+
+	# EN DERNIER : le reseau lit les hauteurs pour rester sous terre et pour
+	# placer ses entrees sur des versants emerges. Le bruit qu'il remplace, lui,
+	# ne dependait de rien et se preparait en tete.
+	caves.build(self, seed_value, SEA_LEVEL, BEDROCK_DEPTH)
 
 
 # Ombre pluviometrique : on remonte le vent sur quelques dizaines de voxels et
@@ -817,12 +851,6 @@ func sub_surface(biome: int) -> Vector2i:
 
 # --- Sauvegarde/restauration pour le cache ---------------------------------
 
-func _prepare_cave_noise(seed_value: int) -> void:
-	_cave_noise.seed = seed_value + 3
-	_cave_noise.frequency = 0.045
-	_cave_noise.fractal_octaves = 2
-
-
 # Etat complet de la carte, pour `map_cache.gd`.
 #
 # Tous les champs sont stockes, y compris ceux qui ne servent qu'a l'ecran
@@ -871,7 +899,11 @@ func restore_state(data: Dictionary) -> bool:
 	_min_height = int(data["min_height"])
 	_max_height = int(data["max_height"])
 
-	_prepare_cave_noise(seed_used)
+	# Le reseau est RECALCULE plutot que stocke. Il derive entierement de la
+	# graine et des hauteurs, toutes deux dans le cache : le stocker reviendrait
+	# a sauvegarder ce qu'on sait deja reproduire, et ferait grossir une entree
+	# de cache de plusieurs milliers de capsules.
+	caves.build(self, seed_used, SEA_LEVEL, BEDROCK_DEPTH)
 	return true
 
 

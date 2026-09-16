@@ -72,16 +72,15 @@ const SURFACE_SKIN := 2
 # melanger — c'est pourquoi ajouter du bruit au shader ne changeait presque
 # rien.
 #
-# Les anneaux achetent donc SEPT metres de portee au prix du carre : vingt-cinq
-# lectures. Ils echantillonnent grossierement au loin, ce qui reintroduirait
-# des marches ; c'est le pinceau du shader qui les dissout, et les deux ne
-# valent qu'ensemble.
-# Quatre anneaux, jusqu'a DIX metres. Les anneaux lointains sont volontairement
-# peu ponderes : une matiere a dix metres ne pese que 8 % environ, ce qui ne
-# suffit pas a la faire apparaitre par elle-meme. Elle est juste PRESENTE parmi
-# les quatre emplacements, et c'est tout ce dont le pinceau a besoin pour la
-# faire surgir par plaques — l'elargissement du fondu se joue la, pas dans les
-# poids.
+# Les anneaux achetent donc DIX metres de portee pour trente-trois lectures.
+# Ils echantillonnent grossierement au loin, ce qui reintroduirait des marches ;
+# c'est le pinceau du shader qui les dissout, et les deux ne valent qu'ensemble.
+#
+# Les anneaux lointains sont volontairement peu ponderes : une matiere a dix
+# metres ne pese que 8 % environ, bien trop peu pour apparaitre d'elle-meme.
+# Elle est seulement PRESENTE parmi les quatre emplacements, et c'est tout ce
+# dont le pinceau a besoin pour la faire surgir par plaques. L'elargissement du
+# fondu se joue la, pas dans les poids.
 const BLEND_KERNEL := [
 	0, 0, 10,
 
@@ -147,7 +146,16 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 	if float(oy) > float(heights.y) + 2.0:
 		buffer.fill_f(1.0, SDF_CHANNEL)
 		return
-	if block_top < heights.x - WorldMap.CAVE_MAX_DEPTH:
+	# Bloc entierement sous le relief et qu'aucune galerie ne traverse : il est
+	# plein, inutile de le parcourir.
+	#
+	# Le bruit qu'on remplacait tenait dans une bande de vingt-quatre voxels sous
+	# la surface, ce qui suffisait a ecarter tous les blocs profonds d'une simple
+	# comparaison. Le reseau, lui, descend jusqu'au plancher du monde : sans ce
+	# test par pave, plus AUCUN bloc souterrain ne sortait par ce raccourci, et
+	# la generation passait de cinq millisecondes a plusieurs secondes.
+	if block_top < heights.x and not map.caves_touch(
+			origin_in_voxels, Vector3i(bs.x * step, bs.y * step, bs.z * step)):
 		buffer.fill_f(-1.0, SDF_CHANNEL)
 		_fill_material(buffer, Layer.STONE)
 		return
@@ -165,6 +173,10 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 			var sub_depth: int = strata.y
 			# Calcule une fois par COLONNE : le melange ne depend que de x et z.
 			var surface_mix := _surface_mix(wx, wz)
+			# De meme pour les grottes : la recherche des capsules proches est un
+			# acces de dictionnaire, hors de prix repete par voxel.
+			var cave_capsules := map.cave_column(wx, wz)
+			var cave_band := map.cave_y_bounds(cave_capsules)
 
 			for y in bs.y:
 				var wy := oy + y * step
@@ -177,9 +189,11 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 				# voisinage du zero.
 				var sdf := float(wy) - ground
 
-				# Bedrock : jamais creusee, meme par une grotte.
-				if wy >= WorldMap.BEDROCK_DEPTH:
-					sdf = maxf(sdf, map.cave_sdf(wx, wy, wz, depth))
+				# Bedrock : jamais creusee, meme par une grotte. La bande
+				# d altitudes ecarte d un test les voxels que le reseau ne
+				# peut pas atteindre, soit l essentiel de la colonne.
+				if wy >= WorldMap.BEDROCK_DEPTH and wy >= cave_band.x and wy <= cave_band.y:
+					sdf = maxf(sdf, map.cave_sdf_in(cave_capsules, wx, wy, wz))
 
 				buffer.set_voxel_f(clampf(sdf / 8.0, -1.0, 1.0), x, y, z, SDF_CHANNEL)
 
