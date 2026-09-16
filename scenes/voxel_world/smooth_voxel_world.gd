@@ -48,6 +48,12 @@ func _ready() -> void:
 		map = MapCache.load_or_generate(world_seed, map_size, map_height)
 	var map_ms := Time.get_ticks_msec() - started
 
+	# La carte est RENDUE aux reglages, pour que l'ecran de generation la
+	# retrouve telle quelle si l'on y revient. Sans ca, quitter la partie coute
+	# une relecture complete du cache — plusieurs secondes sur une carte de 800,
+	# pour retomber sur l'objet qu'on vient de fermer.
+	WorldSettings.prepared_map = map
+
 	var generator := TerrainGenerator.new()
 	generator.map = map
 

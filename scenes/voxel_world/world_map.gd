@@ -252,6 +252,20 @@ var _biomes: PackedByteArray
 # Reseau de grottes. Redérive de la graine, jamais stocke : c est la meme
 # politique que le bruit qu il remplace, et elle est ce qui rend le monde
 # gratuit a sauvegarder.
+# Avancement de `generate()`, entre 0 et 1, et demande d'interruption.
+#
+# La generation tourne sur un fil separe pendant que l'interface reste vivante.
+# Ces deux variables sont le seul lien entre les deux, et elles se passent de
+# verrou : un float et un booleen, ecrits par un cote et lus par l'autre, sans
+# qu'aucune decision ne depende de leur coherence mutuelle. Le pire cas est une
+# barre de progression en retard d'une image.
+#
+# `cancel_requested` est relu entre les passes ET au fil des boucles longues :
+# une carte de 800 met plusieurs secondes, et n'annuler qu'entre deux passes
+# laisserait l'utilisateur attendre l'essentiel du calcul qu'il vient d'annuler.
+var progress := 0.0
+var cancel_requested := false
+
 var caves: CaveNetwork = CaveNetwork.new()
 var _min_height := 0
 var _max_height := 0
@@ -426,11 +440,31 @@ func biome_name(biome: int) -> String:
 # constante compilee — voir issue #31.
 func generate(seed_value: int) -> void:
 	seed_used = seed_value
+	progress = 0.0
 
+	# Les fractions ne sont pas reparties uniformement : elles suivent le cout
+	# MESURE de chaque passe. Le relief de base et l'hydrologie pesent a eux
+	# deux les quatre cinquiemes du total, et une barre qui les traiterait a
+	# egalite avec les autres passerait son temps a mentir.
 	_build_base_relief(seed_value)
+	if cancel_requested:
+		return
+	progress = 0.45
+
 	_apply_hydrology()
+	if cancel_requested:
+		return
+	progress = 0.80
+
 	_build_rain_shadow()
+	if cancel_requested:
+		return
+	progress = 0.90
+
 	_classify(seed_value)
+	if cancel_requested:
+		return
+	progress = 0.95
 
 	_min_height = size_y
 	_max_height = 0
@@ -442,6 +476,7 @@ func generate(seed_value: int) -> void:
 	# placer ses entrees sur des versants emerges. Le bruit qu'il remplace, lui,
 	# ne dependait de rien et se preparait en tete.
 	caves.build(self, seed_value, SEA_LEVEL, BEDROCK_DEPTH)
+	progress = 1.0
 
 
 # Ombre pluviometrique : on remonte le vent sur quelques dizaines de voxels et
@@ -500,6 +535,12 @@ func _build_base_relief(seed_value: int) -> void:
 	var center := float(size_xz) / 2.0
 
 	for z in size_xz:
+		# Un relevé par RANGEE, pas par colonne : l interface n a besoin que
+		# d une valeur par image, et le test d annulation doit rester assez
+		# frequent pour qu un changement de reglage reponde tout de suite.
+		progress = 0.45 * float(z) / float(size_xz)
+		if cancel_requested:
+			return
 		for x in size_xz:
 			var dx := float(x) - center
 			var dz := float(z) - center

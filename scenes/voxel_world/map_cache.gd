@@ -46,16 +46,30 @@ static var _last_was_cached := false
 
 # Retourne la carte correspondant a ces parametres, depuis le cache si elle
 # s'y trouve, en la calculant sinon.
-static func load_or_generate(seed_value: int, size: int, height: int) -> WorldMap:
+# `target` est la carte a remplir, fournie par l'appelant.
+#
+# Elle existe pour que l'appelant puisse SURVEILLER le calcul : c'est lui qui
+# tient l'objet, donc il peut lire `progress` et poser `cancel_requested`
+# pendant que `generate()` tourne sur un autre fil. Sans elle, la carte
+# n'existerait qu'au retour de la fonction, c'est-a-dire une fois le calcul
+# fini — trop tard pour afficher quoi que ce soit ou pour l'interrompre.
+#
+# Retourne `null` si la generation a ete annulee. Une carte a moitie calculee
+# n'est pas une carte, et surtout elle ne doit pas atterrir dans le cache.
+static func load_or_generate(seed_value: int, size: int, height: int,
+		target: WorldMap = null) -> WorldMap:
 	var path := _path_for(seed_value, size, height)
 
+	# La relecture est rapide et ne s'annule pas : inutile de la surveiller.
 	var cached := _read(path, seed_value, size, height)
 	if cached != null:
 		_last_was_cached = true
 		return cached
 
-	var map := WorldMap.new(size, height)
+	var map := target if target != null else WorldMap.new(size, height)
 	map.generate(seed_value)
+	if map.cancel_requested:
+		return null
 	_write(path, map)
 	_last_was_cached = false
 	return map

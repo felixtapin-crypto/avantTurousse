@@ -53,7 +53,19 @@ var _day_buttons: Array[Button] = []
 var _hour_buttons: Array[Button] = []
 var _biome_rows: VBoxContainer
 var _play_button: Button
+var _generate_button: Button
 var _cache_label: Label
+var _progress_fill: Control
+var _progress_row: Control
+
+# Generation asynchrone.
+#
+# `_pending` est la carte EN COURS de calcul, et elle est tenue ici justement
+# pour qu'on puisse lire son avancement et lui demander de s'arreter pendant
+# que le fil travaille. `_thread` est vivant tant que le calcul l'est.
+var _thread: Thread
+var _pending: WorldMap
+var _started_msec := 0
 
 
 # F10 ferme le jeu depuis l ecran de carte aussi : c est le premier ecran, donc
@@ -69,7 +81,32 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _ready() -> void:
 	_build_ui()
+
+	# Retour depuis la partie : la carte est deja la, en memoire, et elle a
+	# exactement les reglages courants. La recalculer — ou meme la relire au
+	# cache — ferait attendre plusieurs secondes pour retomber sur l'objet qu'on
+	# tient deja.
+	var kept := WorldSettings.prepared_map
+	WorldSettings.prepared_map = null
+	if kept != null and kept.size_xz == WorldSettings.size \
+			and kept.size_y == WorldSettings.height:
+		_map = kept
+		WorldSettings.seed_value = kept.seed_used
+		_seed_edit.text = str(kept.seed_used)
+		_select_layer(_layer)
+		_refresh_stats()
+		_status.text = "Monde de la partie precedente"
+		_refresh_buttons()
+		_refresh_cache_label()
+		return
+
 	_regenerate()
+
+
+# Un fil encore vivant a la fermeture fait rouspeter Godot, et a raison : il
+# ecrit peut-etre dans le cache.
+func _exit_tree() -> void:
+	_cancel_pending()
 
 
 # --- Construction de l'interface ------------------------------------------
@@ -175,10 +212,6 @@ func _build_side_column() -> Control:
 	reroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reroll.pressed.connect(_on_reroll)
 	seed_row.add_child(reroll)
-	var again := _pill("Generer")
-	again.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	again.pressed.connect(_on_seed_entered)
-	seed_row.add_child(again)
 	side.add_child(seed_row)
 
 	side.add_child(_gap(10))
@@ -264,18 +297,43 @@ func _build_side_column() -> Control:
 	cache_row.add_child(clear_button)
 	side.add_child(cache_row)
 
-	_play_button = Button.new()
-	_play_button.text = "Explorer ce monde"
-	_play_button.custom_minimum_size = Vector2(0, 46)
-	_play_button.add_theme_font_size_override("font_size", 16)
-	_play_button.add_theme_color_override("font_color", BG)
-	_play_button.add_theme_color_override("font_hover_color", BG)
-	_play_button.add_theme_color_override("font_pressed_color", BG)
-	_play_button.add_theme_stylebox_override("normal", _flat(GOLD, 4))
-	_play_button.add_theme_stylebox_override("hover", _flat(GOLD.lightened(0.12), 4))
-	_play_button.add_theme_stylebox_override("pressed", _flat(GOLD.darkened(0.15), 4))
+	# Barre d'avancement, dans le meme vocabulaire que les parts de biome : une
+	# piste sombre et un remplissage ancre a gauche. Elle n'est visible que
+	# pendant un calcul, pour ne pas occuper la place en permanence.
+	_progress_row = VBoxContainer.new()
+	_progress_row.add_theme_constant_override("separation", 0)
+	var track_stack := Control.new()
+	track_stack.custom_minimum_size = Vector2(0, 4)
+	var track := PanelContainer.new()
+	track.add_theme_stylebox_override("panel", _bar(Color(INK, 0.12)))
+	track.set_anchors_preset(Control.PRESET_FULL_RECT)
+	track_stack.add_child(track)
+	var fill := PanelContainer.new()
+	fill.add_theme_stylebox_override("panel", _bar(GOLD))
+	fill.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fill.anchor_right = 0.0
+	track_stack.add_child(fill)
+	_progress_fill = fill
+	_progress_row.add_child(track_stack)
+	_progress_row.add_child(_gap(8))
+	_progress_row.visible = false
+	side.add_child(_progress_row)
+
+	# Les deux actions partagent la meme ligne : generer et partir sont les deux
+	# issues de cet ecran, et rien ne justifie d'en releguer une plus haut.
+	var action_row := HBoxContainer.new()
+	action_row.add_theme_constant_override("separation", 8)
+
+	_generate_button = _action_button("Generer", LAGOON)
+	_generate_button.pressed.connect(_on_seed_entered)
+	action_row.add_child(_generate_button)
+
+	_play_button = _action_button("Explorer ce monde", GOLD)
+	_play_button.size_flags_stretch_ratio = 1.6
 	_play_button.pressed.connect(_on_play)
-	side.add_child(_play_button)
+	action_row.add_child(_play_button)
+
+	side.add_child(action_row)
 
 	_select_size(SIZES.find(WorldSettings.size))
 	_select_day_length(DAY_LENGTHS.find(WorldSettings.day_length_seconds))
@@ -313,6 +371,26 @@ func _flat(color: Color, radius: int) -> StyleBoxFlat:
 
 # Bouton plat facon pastille, sans le relief du theme par defaut : c'est ce
 # qui distingue le plus une interface de jeu d'un panneau d'editeur.
+# Bouton d'action pleine largeur. La couleur DIT ce que fait le bouton : le
+# lagon pour rester sur cet ecran, l'or pour en partir.
+func _action_button(text: String, color: Color) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(0, 46)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_font_size_override("font_size", 16)
+	for state in ["font_color", "font_hover_color", "font_pressed_color"]:
+		button.add_theme_color_override(state, BG)
+	# Un bouton desactive doit se lire comme tel sans qu'on ait a le cliquer :
+	# fond eteint et texte efface, pas seulement une teinte un peu differente.
+	button.add_theme_color_override("font_disabled_color", Color(INK, 0.30))
+	button.add_theme_stylebox_override("normal", _flat(color, 4))
+	button.add_theme_stylebox_override("hover", _flat(color.lightened(0.12), 4))
+	button.add_theme_stylebox_override("pressed", _flat(color.darkened(0.15), 4))
+	button.add_theme_stylebox_override("disabled", _flat(Color(INK, 0.07), 4))
+	return button
+
+
 func _pill(text: String) -> Button:
 	var button := Button.new()
 	button.text = text
@@ -342,12 +420,22 @@ func _select_layer(index: int) -> void:
 	_refresh_image()
 
 
+# Changer la taille ANNULE le calcul en cours et laisse la carte affichee en
+# l'etat.
+#
+# On ne relance pas tout seul : la taille se choisit souvent en deux clics, et
+# enchainer une generation a chacun ferait travailler pour rien. La carte a
+# l'ecran n'etant alors plus celle des reglages, « Explorer ce monde » se
+# desactive de lui-meme — c'est `_map_is_current` qui s'en charge.
 func _select_size(index: int) -> void:
 	if index < 0:
-		index = SIZES.find(600)
+		index = SIZES.find(800)
+	_cancel_pending()
 	WorldSettings.size = SIZES[index]
 	for i in _size_buttons.size():
 		_mark_selected(_size_buttons[i], i == index)
+	_status.text = "Taille changee — a regenerer"
+	_refresh_buttons()
 
 
 func _on_reroll() -> void:
@@ -376,7 +464,7 @@ func _on_seed_submitted(_text: String) -> void:
 
 
 func _on_play() -> void:
-	if _map == null or _busy:
+	if _busy or not _map_is_current():
 		return
 	# La carte affichee part telle quelle : elle a deja coute son calcul, et la
 	# regenerer donnerait exactement le meme resultat.
@@ -384,31 +472,113 @@ func _on_play() -> void:
 	get_tree().change_scene_to_file("res://scenes/voxel_world/smooth_voxel_world.tscn")
 
 
+# La generation part sur un FIL separe.
+#
+# Elle etait synchrone, avec une frame d'attente pour que le libelle s'affiche
+# avant de figer la fenetre. Ca tenait tant qu'une carte coutait 400 ms ; a 800
+# de cote elle en coute plusieurs milliers, pendant lesquelles rien ne bouge,
+# aucun avancement ne s'affiche et aucun reglage ne repond.
+#
+# `WorldMap` s'y prete : c'est du calcul pur, sans acces a la scene.
 func _regenerate() -> void:
-	if _busy:
-		return
-	_busy = true
-	_play_button.disabled = true
+	_cancel_pending()
+
+	_pending = WorldMap.new(WorldSettings.size, WorldSettings.height)
 	_seed_edit.text = str(WorldSettings.seed_value)
-	_status.text = "Generation du monde %d x %d..." % [WorldSettings.size, WorldSettings.size]
-	# Une frame pour que le libelle s'affiche : la generation est synchrone et
-	# fige la fenetre plusieurs secondes.
-	await get_tree().process_frame
+	_started_msec = Time.get_ticks_msec()
+	_busy = true
+	_set_progress(0.0)
+	_refresh_buttons()
 
-	var started := Time.get_ticks_msec()
-	_map = MapCache.load_or_generate(
-		WorldSettings.seed_value, WorldSettings.size, WorldSettings.height)
-	var elapsed := Time.get_ticks_msec() - started
+	# Les reglages sont recopies : ils peuvent changer pendant le calcul, et le
+	# fil doit travailler sur ceux d'AU MOMENT du lancement.
+	var seed_value := WorldSettings.seed_value
+	var size := WorldSettings.size
+	var height := WorldSettings.height
+	var target := _pending
 
+	_thread = Thread.new()
+	_thread.start(func() -> WorldMap:
+		return MapCache.load_or_generate(seed_value, size, height, target))
+	set_process(true)
+
+
+# Interrompt le calcul en cours, s'il y en a un.
+#
+# `wait_to_finish` bloque, mais brievement : la generation relit sa demande
+# d'arret a chaque rangee de colonnes, soit quelques dixiemes de milliseconde.
+# Ne pas attendre laisserait deux fils ecrire dans le cache en meme temps.
+func _cancel_pending() -> void:
+	if _thread == null:
+		return
+	if _pending != null:
+		_pending.cancel_requested = true
+	_thread.wait_to_finish()
+	_thread = null
+	_pending = null
+	_busy = false
+
+
+func _process(_delta: float) -> void:
+	if _thread == null:
+		set_process(false)
+		return
+
+	if _pending != null:
+		_set_progress(_pending.progress)
+		_status.text = "Generation du monde %d x %d — %d %%" % [
+			WorldSettings.size, WorldSettings.size, int(_pending.progress * 100.0)]
+
+	if _thread.is_alive():
+		return
+
+	var result: WorldMap = _thread.wait_to_finish()
+	_thread = null
+	_pending = null
+	_busy = false
+	set_process(false)
+
+	if result == null:
+		# Annulee : une autre generation a deja pris la suite, ou l'utilisateur
+		# a change de reglage. Rien a afficher.
+		return
+
+	_map = result
+	_set_progress(1.0)
 	_select_layer(_layer)
 	_refresh_stats()
 	# On distingue les deux cas a l'ecran : qui calibre la generation doit
 	# savoir s'il regarde un monde recalcule ou une vieille carte relue.
 	_status.text = ("Monde repris du cache en %d ms" if MapCache.last_was_cached()
-		else "Monde genere en %d ms") % elapsed
-	_play_button.disabled = false
-	_busy = false
+		else "Monde genere en %d ms") % (Time.get_ticks_msec() - _started_msec)
+	_refresh_buttons()
 	_refresh_cache_label()
+
+
+# La carte affichee correspond-elle aux reglages COURANTS ?
+#
+# C'est la condition pour pouvoir partir explorer. Changer la graine ou la
+# taille sans regenerer laisse a l'ecran une carte qui n'est plus celle qu'on
+# obtiendrait, et lancer la partie dessus serait un piege.
+func _map_is_current() -> bool:
+	return (_map != null
+		and _map.seed_used == WorldSettings.seed_value
+		and _map.size_xz == WorldSettings.size
+		and _map.size_y == WorldSettings.height)
+
+
+func _refresh_buttons() -> void:
+	if _generate_button != null:
+		_generate_button.disabled = _busy
+	if _play_button != null:
+		_play_button.disabled = _busy or not _map_is_current()
+	if _progress_row != null:
+		_progress_row.visible = _busy
+
+
+func _set_progress(value: float) -> void:
+	if _progress_fill != null:
+		_progress_fill.anchor_right = clampf(value, 0.0, 1.0)
 
 
 func _refresh_image() -> void:
