@@ -89,8 +89,21 @@ static func last_was_cached() -> bool:
 static func parameters_hash() -> int:
 	var script: GDScript = WorldMap
 	var constants := script.get_script_constant_map()
-	var names := constants.keys()
-	names.sort() # ordre stable : un dictionnaire ne garantit pas le sien
+
+	# Les cles sont converties en String AVANT d'etre triees, et ce n'est pas
+	# une precaution de style.
+	#
+	# `get_script_constant_map()` rend des StringName, dont l'operateur `<`
+	# compare le POINTEUR et non le texte — c'est ce qui les rend rapides.
+	# Trier des StringName donne donc un ordre qui depend des adresses
+	# d'allocation, donc du processus. L'empreinte changeait a chaque
+	# lancement, et parfois entre deux processus de la meme minute : le cache
+	# etait invalide presque toujours, et personne ne s'en apercevait puisque
+	# regenerer une carte donne exactement le meme monde, seulement plus lent.
+	var names := PackedStringArray()
+	for key in constants.keys():
+		names.append(String(key))
+	names.sort()
 
 	var parts := PackedStringArray()
 	for name in names:
@@ -131,6 +144,7 @@ static func entries() -> Array[Dictionary]:
 			"path": path,
 			"thumbnail": path.get_basename() + ".png",
 			"modified": FileAccess.get_modified_time(path),
+			"meta": _read_meta(path),
 		})
 
 	out.sort_custom(func(a, b): return int(a["modified"]) > int(b["modified"]))
@@ -174,6 +188,7 @@ static func clear() -> void:
 	for entry in _entries(dir):
 		dir.remove(entry)
 		dir.remove(entry.get_basename() + ".png")
+		dir.remove(entry.get_basename() + ".json")
 	_last_was_cached = false
 
 
@@ -230,6 +245,7 @@ static func _write(path: String, map: WorldMap) -> void:
 	file.close()
 
 	_write_thumbnail(path, map)
+	_write_meta(path, map)
 	_enforce_limit()
 
 
@@ -265,6 +281,7 @@ static func _enforce_limit() -> void:
 		# La vignette part avec sa carte, sinon le dossier se remplit
 		# d apercus de mondes qui n existent plus.
 		dir.remove(name.get_basename() + ".png")
+		dir.remove(name.get_basename() + ".json")
 
 
 # Vignette ecrite a cote de la carte, pour que le menu des mondes n'ait pas a
@@ -283,3 +300,64 @@ static func _thumbnail_image(map: WorldMap) -> Image:
 	var image := MapRender.render(map, 0)
 	image.resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, Image.INTERPOLATE_LANCZOS)
 	return image
+
+
+# Mesures de la carte, ecrites a cote d'elle.
+#
+# Le menu des mondes les affiche — part de terres emergees, part praticable,
+# biome dominant — et il ne peut pas les recalculer : cela demanderait d'ouvrir
+# la carte, soit une vingtaine de megaoctets par vignette. On les fige donc au
+# moment ou la carte est en memoire de toute facon.
+#
+# En JSON et non en `store_var` : c'est quelques centaines d'octets, et un
+# format qu'on peut ouvrir a la main quand un chiffre surprend.
+static func _write_meta(map_path: String, map: WorldMap) -> void:
+	var counts := {}
+	var land := 0
+	var flat := 0
+	for z in map.size_xz:
+		for x in map.size_xz:
+			var biome := map.biome_at(x, z)
+			counts[biome] = int(counts.get(biome, 0)) + 1
+			if map.terrain_height(x, z) <= WorldMap.SEA_LEVEL:
+				continue
+			land += 1
+			if map.slope_at(x, z) <= WorldMap.FLAT_SLOPE:
+				flat += 1
+
+	# Le biome dominant se cherche sur les TERRES : la mer profonde gagnerait
+	# toujours, et ne dit rien du monde qu'on va parcourir.
+	var ranked := []
+	for biome in counts.keys():
+		if biome == WorldMap.Biome.DEEP_SEA or biome == WorldMap.Biome.SHALLOW_SEA:
+			continue
+		ranked.append([int(counts[biome]), map.biome_name(biome)])
+	ranked.sort_custom(func(a, b): return a[0] > b[0])
+
+	var total := maxi(map.size_xz * map.size_xz, 1)
+	var file := FileAccess.open(map_path.get_basename() + ".json", FileAccess.WRITE)
+	if file == null:
+		return
+	# Les DEUX premiers biomes : le premier est presque toujours la prairie, donc
+	# il ne distingue pas deux mondes. C est le second qui a du caractere — neige,
+	# desert, foret — et qui fait qu on reconnait une ile.
+	file.store_string(JSON.stringify({
+		"land": float(land) / float(total),
+		"flat": float(flat) / float(maxi(land, 1)),
+		"top_biome": ranked[0][1] if ranked.size() > 0 else "",
+		"second_biome": ranked[1][1] if ranked.size() > 1 else "",
+		"second_share": (float(ranked[1][0]) / float(maxi(land, 1))) if ranked.size() > 1 else 0.0,
+	}))
+	file.close()
+
+
+static func _read_meta(map_path: String) -> Dictionary:
+	var path := map_path.get_basename() + ".json"
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
+	return parsed if typeof(parsed) == TYPE_DICTIONARY else {}
