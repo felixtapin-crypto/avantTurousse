@@ -20,6 +20,7 @@ const ARRIVAL_DURATION := 3.2
 @onready var block_label: Label = $Hud/BlockLabel
 @onready var crosshair_h: ColorRect = $Hud/Crosshair/Horizontal
 @onready var crosshair_v: ColorRect = $Hud/Crosshair/Vertical
+@onready var clock_label: Label = $Hud/ClockLabel
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -37,6 +38,10 @@ var arrived := false
 # de sculpte du terrain elle-meme.
 var block_count := 5
 
+# Debloque par Collectible.pick_up() une fois l'horloge trouvee par
+# n'importe quel joueur de l'equipe (voir DESIGN.md, gabarit "L'horloge").
+var has_clock := false
+
 var _arrival_start: Vector3
 var _arrival_target: Vector3
 var _glider: Node3D = null
@@ -45,6 +50,8 @@ var _was_raining := false
 
 
 func _ready() -> void:
+	add_to_group("players")
+
 	# The node's name is set to the peer id by World._spawn_player(), so this
 	# grants movement authority to whichever peer this instance represents.
 	set_multiplayer_authority(name.to_int())
@@ -59,6 +66,7 @@ func _ready() -> void:
 	camera.current = is_multiplayer_authority()
 	hud.visible = is_multiplayer_authority()
 	_update_hud()
+	clock_label.visible = has_clock
 	_rain = _build_rain()
 
 	if is_multiplayer_authority():
@@ -131,16 +139,36 @@ func _process(_delta: float) -> void:
 		_rain.emitting = raining
 		_was_raining = raining
 
+	if has_clock:
+		clock_label.text = _format_time(world.get_time_of_day())
 
-# Creuse la colonne visee (baisse sa hauteur de 1m) et recupere un bloc.
+
+# Creuse la colonne visee (baisse sa hauteur de 1m) et recupere un bloc -
+# sauf si on vise plutot un objet ramassable (Collectible), auquel cas on le
+# recupere a la place.
 func _dig() -> void:
 	var hit := _raycast()
 	if hit.is_empty():
 		return
+
+	var collider = hit.get("collider")
+	if collider is Collectible:
+		collider.pick_up.rpc()
+		return
+
 	var column := _hit_to_column(hit)
 	world_platform.request_edit.rpc(column.x, column.y, -1)
 	block_count += 1
 	_update_hud()
+
+
+# Appele par Collectible.pick_up() sur l'instance locale faisant autorite
+# (voir la boucle sur le groupe "players") des qu'un joueur de l'equipe
+# trouve l'horloge - profite a tout le monde, pas seulement a qui l'a
+# trouvee, conformement a la quete partagee.
+func unlock_clock() -> void:
+	has_clock = true
+	clock_label.visible = true
 
 
 # Construit sur la colonne visee (monte sa hauteur de 1m), si on a un bloc.
@@ -162,6 +190,7 @@ func _raycast() -> Dictionary:
 	var to := from - camera.global_transform.basis.z * INTERACTION_RANGE
 	var query := PhysicsRayQueryParameters3D.create(from, to)
 	query.exclude = [self]
+	query.collide_with_areas = true
 	return space_state.intersect_ray(query)
 
 
@@ -172,6 +201,11 @@ func _hit_to_column(hit: Dictionary) -> Vector2i:
 
 func _update_hud() -> void:
 	block_label.text = "Blocs : %d" % block_count
+
+
+func _format_time(time_of_day: float) -> String:
+	var total_minutes := int(time_of_day * 24.0 * 60.0)
+	return "%02d:%02d" % [total_minutes / 60, total_minutes % 60]
 
 
 # Fait apparaitre le joueur tres haut au-dessus de son point d'atterrissage a

@@ -46,6 +46,16 @@ func get_height_at(x: float, z: float) -> float:
 	return max(_effective_height(xi, zi), 0.0)
 
 
+# Contrairement a get_height_at (qui ramene toujours a 0 pour rester
+# utilisable sans verification), dit si la colonne la plus proche fait
+# vraiment partie de la plateforme ou si c'est du vide au-dela du rivage.
+# Sert a placer la vegetation sans la faire deborder dans les falaises.
+func is_land(x: float, z: float) -> bool:
+	var xi := clampi(int(round(x)), 0, size - 1)
+	var zi := clampi(int(round(z)), 0, size - 1)
+	return heights[zi * size + xi] >= 0.0
+
+
 func get_spawn_position(offset: Vector2 = Vector2.ZERO) -> Vector3:
 	var cx := float(size) / 2.0 + offset.x
 	var cz := float(size) / 2.0 + offset.y

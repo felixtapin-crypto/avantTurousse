@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scenes/world/world.gd" id="WorldScript"]
 [ext_resource type="Script" path="res://scenes/world/platform.gd" id="PlatformScript"]
 [ext_resource type="Script" path="res://scenes/world/day_night_cycle.gd" id="DayNightCycleScript"]
 [ext_resource type="Script" path="res://scenes/world/clouds.gd" id="CloudsScript"]
+[ext_resource type="Script" path="res://scenes/world/vegetation.gd" id="VegetationScript"]
 
 [node name="World" type="Node3D"]
 script = ExtResource("WorldScript")
@@ -25,6 +26,9 @@ script = ExtResource("CloudsScript")
 
 [node name="Platform" type="StaticBody3D" parent="."]
 script = ExtResource("PlatformScript")
+
+[node name="Vegetation" type="Node3D" parent="."]
+script = ExtResource("VegetationScript")
 
 [node name="Players" type="Node3D" parent="."]
 

@@ -6,6 +6,7 @@ const PlayerScene := preload("res://scenes/player/player.tscn")
 # systeme en place (voir DESIGN.md, section Sauvegarde). Pour l'instant fixe
 # pour que la plateforme soit reproductible pendant qu'on teste.
 const PLATFORM_SEED := 1
+const VEGETATION_SEED := PLATFORM_SEED + 1000 # decorele de la seed du terrain
 
 const FALL_LIMIT_Y := -30.0
 
@@ -18,10 +19,12 @@ const WEATHER_FREQUENCY := 0.02   # vitesse de changement de la meteo
 const RAIN_THRESHOLD := 0.35      # au-dessus de ce seuil de bruit, il pleut
 
 @onready var platform: Platform = $Platform
+@onready var vegetation: Vegetation = $Vegetation
 @onready var players_root: Node3D = $Players
 @onready var wrecks_root: Node3D = $Wrecks
 @onready var spawner: MultiplayerSpawner = $MultiplayerSpawner
 @onready var game_over_panel: Control = $GameOverLayer/GameOverPanel
+@onready var day_night_cycle: DayNightCycle = $DayNightCycle
 
 var game_over := false
 var _weather_noise := FastNoiseLite.new()
@@ -29,6 +32,7 @@ var _weather_noise := FastNoiseLite.new()
 
 func _ready() -> void:
 	platform.generate(PLATFORM_SEED)
+	vegetation.generate(VEGETATION_SEED, platform)
 	_weather_noise.seed = WEATHER_SEED
 
 	spawner.spawn_path = players_root.get_path()
@@ -89,6 +93,14 @@ func _on_quit_pressed() -> void:
 func is_raining() -> bool:
 	var t := Time.get_unix_time_from_system() * WEATHER_FREQUENCY
 	return _weather_noise.get_noise_1d(t) > RAIN_THRESHOLD
+
+
+# 0.0-1.0 (minuit -> minuit). Ne devient utile a l'affichage qu'une fois
+# l'horloge trouvee (voir Collectible/Player.unlock_clock) - voir la remarque
+# dans DESIGN.md/TASKS.md sur le fait que ce n'est pas encore une horloge
+# synchronisee entre pairs, seulement calculee independamment par chacun.
+func get_time_of_day() -> float:
+	return day_night_cycle.time_of_day
 
 
 # Garde une trace visuelle de l'atterrissage de chaque joueur : l'engin volant

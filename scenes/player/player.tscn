@@ -40,6 +40,15 @@ offset_bottom = 40.0
 mouse_filter = 2
 text = "Blocs : 0"
 
+[node name="ClockLabel" type="Label" parent="Hud"]
+visible = false
+offset_left = 16.0
+offset_top = 44.0
+offset_right = 200.0
+offset_bottom = 68.0
+mouse_filter = 2
+text = "--:--"
+
 [node name="Crosshair" type="Control" parent="Hud"]
 anchor_left = 0.5
 anchor_top = 0.5
