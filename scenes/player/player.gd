@@ -21,6 +21,19 @@ const HARVEST_HUNGER_RESTORE := 35.0
 const DRINK_THIRST_RESTORE := 50.0
 const BAR_FULL_WIDTH := 150.0
 
+const TOOL_LOCKED_COLOR := Color(0.2, 0.2, 0.2, 0.8)
+const CLOCK_COLOR := Color(0.85, 0.68, 0.25, 1.0)
+const HARVEST_TOOL_COLOR := Color(0.35, 0.65, 0.25, 1.0)
+const HOE_COLOR := Color(0.55, 0.38, 0.2, 1.0)
+const BUCKET_EMPTY_COLOR := Color(0.5, 0.4, 0.25, 1.0)
+const BUCKET_FULL_COLOR := Color(0.25, 0.55, 0.75, 1.0)
+const HANDS_COLOR := Color(0.6, 0.6, 0.65, 1.0)
+const ACTIVE_SLOT_SCALE := Vector2(1.15, 1.15)
+
+# Outils selectionnables (l'horloge et le seau restent "toujours actifs" en
+# parallele - voir DESIGN.md, "Sélecteur d'outil actif" - donc absents d'ici).
+const TOOL_SLOTS := ["hands", "harvest", "hoe"]
+
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
 @onready var mesh: MeshInstance3D = $MeshInstance3D
@@ -33,6 +46,12 @@ const BAR_FULL_WIDTH := 150.0
 @onready var hunger_fill: ColorRect = $Hud/HungerBarBg/HungerBarFill
 @onready var thirst_fill: ColorRect = $Hud/ThirstBarBg/ThirstBarFill
 @onready var message_label: Label = $Hud/MessageLabel
+@onready var seed_label: Label = $Hud/SeedLabel
+@onready var clock_slot: ColorRect = $Hud/ToolsRow/ClockSlot
+@onready var harvest_slot: ColorRect = $Hud/ToolsRow/HarvestSlot
+@onready var hoe_slot: ColorRect = $Hud/ToolsRow/HoeSlot
+@onready var bucket_slot: ColorRect = $Hud/ToolsRow/BucketSlot
+@onready var hands_slot: ColorRect = $Hud/ToolsRow/HandsSlot
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -60,6 +79,24 @@ var has_clock := false
 # (meme mecanisme, pas un objet qu'on se passe physiquement) - a
 # rediscuter si on veut plutot un objet unique porte par un seul joueur.
 var has_harvest_tool := false
+
+# Idem pour la houe (prepare le sol, voir _dig) et le seau (transporte de
+# l'eau, voir _dig quand on est sur de l'eau et Player._interact_farm_plot).
+# bucket_full indique si le seau, une fois trouve, contient de l'eau.
+var has_hoe := false
+var has_bucket := false
+var bucket_full := false
+
+# Outil actuellement "en main" parmi TOOL_SLOTS (touches 1/2/3 ou molette,
+# voir _unhandled_input) - determine ce que fait le clic gauche sur du
+# terrain/une plante plutot qu'un ordre de priorite fixe. Voir DESIGN.md,
+# "Sélecteur d'outil actif".
+var active_tool := "hands"
+
+# Graines/boutures : recuperees en recoltant une plante sauvage (une partie
+# du temps) ou une parcelle cultivee arrivee a maturite ; consommees pour
+# planter sur une parcelle labouree. Voir DESIGN.md, "Jardinage".
+var seed_count := 0
 
 # Jauges de survie (voir DESIGN.md, "Boucle de survie"). Ce qui se passe a 0
 # reste une question ouverte (pas de penalite implementee pour l'instant).
@@ -91,6 +128,7 @@ func _ready() -> void:
 	hud.visible = is_multiplayer_authority()
 	_update_hud()
 	clock_label.visible = has_clock
+	_update_tool_indicators()
 	_rain = _build_rain()
 
 	if is_multiplayer_authority():
@@ -121,6 +159,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_dig()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			_build()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_cycle_tool(-1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_cycle_tool(1)
+
+	if event is InputEventKey and event.pressed:
+		match event.physical_keycode:
+			KEY_1:
+				_select_tool("hands")
+			KEY_2:
+				_select_tool("harvest")
+			KEY_3:
+				_select_tool("hoe")
 
 
 func _physics_process(delta: float) -> void:
@@ -172,12 +223,17 @@ func _process(delta: float) -> void:
 	thirst_fill.size.x = BAR_FULL_WIDTH * (thirst / 100.0)
 
 
-# Boire (si on est sur de l'eau), ramasser un Collectible, recolter une
-# FoodPlant (si on a l'outil), ou creuser la colonne visee (baisse sa
-# hauteur de 1m, +1 bloc) - dans cet ordre de priorite.
+# Boire + remplir le seau (si on est sur de l'eau), ramasser un Collectible,
+# recolter une FoodPlant (si on a l'outil), agir sur une FarmPlot visee,
+# labourer la colonne visee (si on a la houe), ou creuser (baisse la colonne
+# visee de 1m, +1 bloc) - dans cet ordre de priorite.
 func _dig() -> void:
 	if world.is_over_water(position.x, position.z):
 		thirst = minf(100.0, thirst + DRINK_THIRST_RESTORE)
+		if has_bucket and not bucket_full:
+			bucket_full = true
+			_update_tool_indicators()
+			_show_message("Seau rempli.")
 		return
 
 	var hit := _raycast()
@@ -190,17 +246,58 @@ func _dig() -> void:
 		return
 
 	if collider is FoodPlant:
-		if not has_harvest_tool:
-			_show_message("Il faut un outil de récolte.")
+		if active_tool != "harvest":
+			_show_message("Équipez l'outil de récolte (2).")
 			return
 		collider.harvest.rpc()
 		hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
+		seed_count += 1
+		_update_hud()
+		return
+
+	if collider is FarmPlot:
+		_interact_farm_plot(collider)
+		return
+
+	if active_tool == "hoe":
+		var till_column := _hit_to_column(hit)
+		world.till_soil.rpc(till_column.x, till_column.y)
 		return
 
 	var column := _hit_to_column(hit)
 	world_platform.request_edit.rpc(column.x, column.y, -1)
 	block_count += 1
 	_update_hud()
+
+
+# Comportement different selon l'etat de la parcelle visee (voir
+# FarmPlot.State) : planter, arroser, attendre, ou recolter.
+func _interact_farm_plot(plot: FarmPlot) -> void:
+	match plot.state:
+		FarmPlot.State.EMPTY:
+			if seed_count <= 0:
+				_show_message("Pas de graine à planter.")
+				return
+			plot.plant.rpc()
+			seed_count -= 1
+			_update_hud()
+		FarmPlot.State.PLANTED:
+			if not (has_bucket and bucket_full):
+				_show_message("Il faut un seau rempli d'eau.")
+				return
+			plot.water.rpc()
+			bucket_full = false
+			_update_tool_indicators()
+		FarmPlot.State.GROWING:
+			_show_message("Ça pousse encore...")
+		FarmPlot.State.READY:
+			if active_tool != "harvest":
+				_show_message("Équipez l'outil de récolte (2).")
+				return
+			plot.harvest.rpc()
+			hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
+			seed_count += 1
+			_update_hud()
 
 
 # Appele par Collectible.pick_up() sur l'instance locale faisant autorite
@@ -210,13 +307,27 @@ func _dig() -> void:
 func unlock_clock() -> void:
 	has_clock = true
 	clock_label.visible = true
+	_update_tool_indicators()
 
 
 # Meme principe que unlock_clock, pour l'outil de recolte (voir la
 # remarque plus haut sur le fait que ca profite a toute l'equipe).
 func unlock_harvest_tool() -> void:
 	has_harvest_tool = true
+	_update_tool_indicators()
 	_show_message("Outil de récolte trouvé !")
+
+
+func unlock_hoe() -> void:
+	has_hoe = true
+	_update_tool_indicators()
+	_show_message("Houe trouvée !")
+
+
+func unlock_bucket() -> void:
+	has_bucket = true
+	_update_tool_indicators()
+	_show_message("Seau trouvé !")
 
 
 # Construit sur la colonne visee (monte sa hauteur de 1m), si on a un bloc.
@@ -249,6 +360,62 @@ func _hit_to_column(hit: Dictionary) -> Vector2i:
 
 func _update_hud() -> void:
 	block_label.text = "Blocs : %d" % block_count
+	seed_label.text = "Graines : %d" % seed_count
+
+
+# Rangee de cases en bas du HUD, une par outil : grisee tant que non
+# trouve, coloree une fois en poche. Le seau distingue en plus rempli
+# (bleu) / vide (couleur bois) une fois trouve. La case de l'outil
+# actuellement selectionne (voir TOOL_SLOTS) est agrandie.
+func _update_tool_indicators() -> void:
+	clock_slot.color = CLOCK_COLOR if has_clock else TOOL_LOCKED_COLOR
+	harvest_slot.color = HARVEST_TOOL_COLOR if has_harvest_tool else TOOL_LOCKED_COLOR
+	hoe_slot.color = HOE_COLOR if has_hoe else TOOL_LOCKED_COLOR
+	hands_slot.color = HANDS_COLOR
+	if not has_bucket:
+		bucket_slot.color = TOOL_LOCKED_COLOR
+	else:
+		bucket_slot.color = BUCKET_FULL_COLOR if bucket_full else BUCKET_EMPTY_COLOR
+
+	hands_slot.scale = ACTIVE_SLOT_SCALE if active_tool == "hands" else Vector2.ONE
+	harvest_slot.scale = ACTIVE_SLOT_SCALE if active_tool == "harvest" else Vector2.ONE
+	hoe_slot.scale = ACTIVE_SLOT_SCALE if active_tool == "hoe" else Vector2.ONE
+
+
+func _owns_tool(tool_name: String) -> bool:
+	match tool_name:
+		"hands":
+			return true
+		"harvest":
+			return has_harvest_tool
+		"hoe":
+			return has_hoe
+		_:
+			return false
+
+
+func _select_tool(tool_name: String) -> void:
+	if not _owns_tool(tool_name):
+		return
+	active_tool = tool_name
+	_update_tool_indicators()
+
+
+func _cycle_tool(direction: int) -> void:
+	var owned: Array[String] = []
+	for tool_name in TOOL_SLOTS:
+		if _owns_tool(tool_name):
+			owned.append(tool_name)
+	if owned.is_empty():
+		return
+
+	var idx := owned.find(active_tool)
+	if idx == -1:
+		idx = 0
+	else:
+		idx = wrapi(idx + direction, 0, owned.size())
+	active_tool = owned[idx]
+	_update_tool_indicators()
 
 
 func _format_time(time_of_day: float) -> String:

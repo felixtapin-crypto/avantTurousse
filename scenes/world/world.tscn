@@ -42,6 +42,8 @@ script = ExtResource("FoodPlantsScript")
 
 [node name="Wrecks" type="Node3D" parent="."]
 
+[node name="FarmPlots" type="Node3D" parent="."]
+
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
 
 [node name="GameOverLayer" type="CanvasLayer" parent="."]

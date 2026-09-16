@@ -25,12 +25,14 @@ const RAIN_THRESHOLD := 0.35      # au-dessus de ce seuil de bruit, il pleut
 @onready var food_plants: FoodPlants = $FoodPlants
 @onready var players_root: Node3D = $Players
 @onready var wrecks_root: Node3D = $Wrecks
+@onready var farm_plots_root: Node3D = $FarmPlots
 @onready var spawner: MultiplayerSpawner = $MultiplayerSpawner
 @onready var game_over_panel: Control = $GameOverLayer/GameOverPanel
 @onready var day_night_cycle: DayNightCycle = $DayNightCycle
 
 var game_over := false
 var _weather_noise := FastNoiseLite.new()
+var _tilled_columns: Dictionary = {}
 
 
 func _ready() -> void:
@@ -110,6 +112,26 @@ func get_time_of_day() -> float:
 
 func is_over_water(x: float, z: float) -> bool:
 	return water.is_water_at(x, z)
+
+
+# Prepare le sol a la houe sur la colonne visee : cree une FarmPlot (voir
+# DESIGN.md, "Jardinage"). any_peer/call_local comme le reste des
+# interactions reseau du jeu ; ignore silencieusement une colonne deja
+# labouree pour eviter d'empiler plusieurs parcelles au meme endroit.
+@rpc("any_peer", "call_local", "reliable")
+func till_soil(cx: int, cz: int) -> void:
+	var key := Vector2i(cx, cz)
+	if _tilled_columns.has(key):
+		return
+	_tilled_columns[key] = true
+
+	var plot := FarmPlot.new()
+	farm_plots_root.add_child(plot)
+	# Petite marge verticale : posee pile a la hauteur du sol, la collision
+	# de la parcelle chevauche exactement la surface du terrain et le rayon
+	# de visee peut toucher l'un ou l'autre de facon incoherente (constate
+	# en test). Meme remede que Platform.get_spawn_position.
+	plot.position = Vector3(float(cx), platform.get_height_at(float(cx), float(cz)) + 0.05, float(cz))
 
 
 # Garde une trace visuelle de l'atterrissage de chaque joueur : l'engin volant

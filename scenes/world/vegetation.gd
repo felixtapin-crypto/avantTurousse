@@ -44,19 +44,22 @@ func generate(seed_value: int, platform_ref: Platform) -> void:
 		tree.rotation.y = rng.randf_range(0.0, TAU)
 		add_child(tree)
 
-	if placed.size() < 2:
+	if placed.size() < 4:
 		return
 
 	# Meme seed -> memes index choisis -> les memes arbres chez tout le
-	# monde. Deux index distincts pour ne pas cacher les deux artefacts au
+	# monde. Quatre index distincts pour ne pas cacher les artefacts au
 	# meme endroit.
-	var clock_index := rng.randi_range(0, placed.size() - 1)
-	var tool_index := rng.randi_range(0, placed.size() - 1)
-	while tool_index == clock_index:
-		tool_index = rng.randi_range(0, placed.size() - 1)
+	var chosen_indices: Array[int] = []
+	while chosen_indices.size() < 4:
+		var idx := rng.randi_range(0, placed.size() - 1)
+		if not chosen_indices.has(idx):
+			chosen_indices.append(idx)
 
-	_attach_clock(get_child(clock_index))
-	_attach_harvest_tool(get_child(tool_index))
+	_attach_clock(get_child(chosen_indices[0]))
+	_attach_harvest_tool(get_child(chosen_indices[1]))
+	_attach_hoe(get_child(chosen_indices[2]))
+	_attach_bucket(get_child(chosen_indices[3]))
 
 
 func _is_good_spot(x: float, z: float) -> bool:
@@ -198,3 +201,97 @@ func _attach_harvest_tool(tree: Node3D) -> Node3D:
 	tool.position = Vector3(-0.45, 0.25, 0.15)
 	tree.add_child(tool)
 	return tool
+
+
+# Houe (voir DESIGN.md, "Jardinage") : long manche + large lame plate
+# perpendiculaire, plantee debout contre le tronc.
+func _attach_hoe(tree: Node3D) -> Node3D:
+	var hoe := Area3D.new()
+	hoe.set_script(CollectibleScene)
+	hoe.unlock_method = "unlock_hoe"
+
+	var handle_material := StandardMaterial3D.new()
+	handle_material.albedo_color = Color(0.42, 0.28, 0.15)
+
+	var blade_material := StandardMaterial3D.new()
+	blade_material.albedo_color = Color(0.55, 0.56, 0.58)
+	blade_material.metallic = 0.5
+	blade_material.roughness = 0.4
+
+	var handle := MeshInstance3D.new()
+	var handle_mesh := CylinderMesh.new()
+	handle_mesh.top_radius = 0.03
+	handle_mesh.bottom_radius = 0.03
+	handle_mesh.height = 0.9
+	handle.mesh = handle_mesh
+	handle.position = Vector3(0, 0.45, 0)
+	handle.material_override = handle_material
+	hoe.add_child(handle)
+
+	var blade := MeshInstance3D.new()
+	var blade_mesh := BoxMesh.new()
+	blade_mesh.size = Vector3(0.24, 0.06, 0.12)
+	blade.mesh = blade_mesh
+	blade.material_override = blade_material
+	blade.position = Vector3(0, 0.88, 0.1)
+	blade.rotation_degrees = Vector3(60, 0, 0)
+	hoe.add_child(blade)
+
+	var area_collision := CollisionShape3D.new()
+	var area_shape := SphereShape3D.new()
+	area_shape.radius = 0.45
+	area_collision.shape = area_shape
+	area_collision.position = Vector3(0, 0.45, 0)
+	hoe.add_child(area_collision)
+
+	hoe.position = Vector3(0.4, 0.0, -0.3)
+	tree.add_child(hoe)
+	return hoe
+
+
+# Seau (voir DESIGN.md, "Jardinage") : petit seau tronconique en bois avec
+# une anse, pose au pied de l'arbre.
+func _attach_bucket(tree: Node3D) -> Node3D:
+	var bucket := Area3D.new()
+	bucket.set_script(CollectibleScene)
+	bucket.unlock_method = "unlock_bucket"
+
+	var wood_material := StandardMaterial3D.new()
+	wood_material.albedo_color = Color(0.5, 0.36, 0.2)
+
+	var metal_material := StandardMaterial3D.new()
+	metal_material.albedo_color = Color(0.6, 0.6, 0.62)
+	metal_material.metallic = 0.5
+	metal_material.roughness = 0.4
+
+	var body := MeshInstance3D.new()
+	var body_mesh := CylinderMesh.new()
+	body_mesh.top_radius = 0.16
+	body_mesh.bottom_radius = 0.12
+	body_mesh.height = 0.22
+	body.mesh = body_mesh
+	body.material_override = wood_material
+	body.position = Vector3(0, 0.11, 0)
+	bucket.add_child(body)
+
+	var handle := MeshInstance3D.new()
+	var handle_mesh := CylinderMesh.new()
+	handle_mesh.top_radius = 0.015
+	handle_mesh.bottom_radius = 0.015
+	handle_mesh.height = 0.24
+	handle.mesh = handle_mesh
+	handle.material_override = metal_material
+	handle.rotation_degrees = Vector3(0, 0, 90)
+	handle.position = Vector3(0, 0.24, 0)
+	bucket.add_child(handle)
+
+	var area_collision := CollisionShape3D.new()
+	var area_shape := SphereShape3D.new()
+	area_shape.radius = 0.3
+	area_collision.shape = area_shape
+	area_collision.position = Vector3(0, 0.12, 0)
+	bucket.add_child(area_collision)
+
+	bucket.position = Vector3(-0.4, 0.0, -0.3)
+	tree.add_child(bucket)
+	return bucket
