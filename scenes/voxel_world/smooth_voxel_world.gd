@@ -19,6 +19,8 @@ extends Node3D
 var _exit_bar: Control
 var _exit_fill: ColorRect
 var _exit_label: Label
+var _water_veil: ColorRect
+var _camera: Camera3D
 
 @export var world_seed: int = 1
 @export var map_size: int = 600
@@ -52,6 +54,7 @@ func _ready() -> void:
 	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris · M nouvelle carte · F10 quitter"
 	status_label.text = "Calcul de la carte..."
 	_build_exit_bar()
+	_build_water_veil()
 
 	# Reglages venus de l'ecran d'apercu, si la partie est passee par lui.
 	world_seed = WorldSettings.seed_value
@@ -101,6 +104,11 @@ func _ready() -> void:
 	player.edit_refused.connect(_on_edit_refused)
 	player.flying = true
 	player.position = _spawn_position()
+
+	# C est l OEIL qui passe sous la surface, et il le fait avant les pieds.
+	var cameras := player.find_children("*", "Camera3D", true, false)
+	if not cameras.is_empty():
+		_camera = cameras[0] as Camera3D
 
 	_add_sky()
 	_add_sea()
@@ -313,13 +321,8 @@ func _process(delta: float) -> void:
 	if map == null:
 		return
 
-	# Profondeur sous le sol, qui pilote l'ambiance souterraine. Voir la note
-	# en tete de SkyCycle : l'ambiante et la perspective aerienne traversent la
-	# roche, et c'est le seul moyen de les eteindre dans une galerie.
 	if _sky != null:
-		var ground := map.terrain_height(
-			floori(player.position.x), floori(player.position.z))
-		_sky.underground = smoothstep(0.0, 6.0, float(ground) - player.position.y)
+		_update_immersion()
 
 	if _message_timer > 0.0:
 		_message_timer -= delta
@@ -346,3 +349,45 @@ func _spawn_position() -> Vector3:
 			if map.terrain_height(x, z) > WorldMap.SEA_LEVEL:
 				return Vector3(float(x) + 0.5, float(map.terrain_height(x, z)) + 3.0, float(z) + 0.5)
 	return Vector3(float(center), float(map_height), float(center))
+
+
+# Ou se trouve l'oeil : sous terre, sous l'eau, ou a l'air libre.
+#
+# LES DEUX SE DECIDENT SUR LA MEME LECTURE, et c'est ce qui empeche les
+# galeries d'etre immergees. Etre sous le niveau de la mer ne suffit pas a
+# etre dans l'eau : une salle a vingt metres de profondeur est sous ce niveau
+# et parfaitement seche. Ce qui tranche, c'est la colonne au-dessus — si le
+# sol y emerge, on est dans la roche ; s'il est noye, on est dans la mer.
+#
+# Le reseau de grottes garantit d'ailleurs le cas : ses salles ne sont placees
+# que sous des colonnes emergees, et `verify_voxel_rules.gd` le verifie.
+#
+# La position prise est celle de la CAMERA et non du corps : c'est l'oeil qui
+# passe sous la surface, et il le fait une seconde avant les pieds.
+func _update_immersion() -> void:
+	var eye := _camera.global_position if _camera != null else player.global_position
+	var column := map.terrain_height(floori(eye.x), floori(eye.z))
+
+	# Voir la note en tete de SkyCycle : l'ambiante et la perspective aerienne
+	# traversent la roche, et c'est le seul moyen de les eteindre sous terre.
+	_sky.underground = smoothstep(0.0, 6.0, float(column) - eye.y)
+
+	var submerged := eye.y < float(WorldMap.SEA_LEVEL) and column <= WorldMap.SEA_LEVEL
+	_sky.underwater = 1.0 if submerged else 0.0
+	_water_veil.visible = submerged
+
+
+# Voile plein ecran de l'immersion. Repris de terrain-3d, qui n'a pas de shader
+# pour cela : une teinte bleu-vert par-dessus l'image suffit, le reste de
+# l'effet venant du brouillard (voir SkyCycle).
+#
+# Il est place SOUS la barre de sortie : quand on quitte la partie depuis l'eau,
+# c'est le voile de transition qu'on doit voir, pas du bleu par-dessus.
+func _build_water_veil() -> void:
+	_water_veil = ColorRect.new()
+	_water_veil.color = SkyCycle.WATER_TINT
+	_water_veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_water_veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_water_veil.visible = false
+	$Hud.add_child(_water_veil)
+	$Hud.move_child(_water_veil, 0)

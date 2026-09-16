@@ -83,9 +83,26 @@ const FOG_SKY_AFFECT := 0.8
 const CAVE_AMBIENT := Color(0.035, 0.038, 0.050)
 const CAVE_FOG := Color(0.020, 0.020, 0.028)
 
+# --- Sous l'eau ---
+#
+# Valeurs reprises de `world/underwater.gd` du projet terrain-3d, qui n'a pas
+# de shader pour cela : l'effet y est un voile plein ecran teinte, double d'un
+# brouillard dense. Le voile est pose par la scene ; ici on ne s'occupe que de
+# l'environnement.
+#
+# Le brouillard passe a `fog_sky_affect = 1` : sous l'eau, le ciel doit etre
+# noye comme le reste, sinon on apercoit un horizon clair a travers la masse
+# d'eau.
+const WATER_TINT := Color(0.06, 0.26, 0.40, 0.42)
+const WATER_FOG := Color(0.04, 0.20, 0.30)
+const WATER_AMBIENT := Color(0.10, 0.24, 0.30)
+const WATER_FOG_DENSITY := 0.08
+
 # 0 en surface, 1 des qu'on est franchement sous terre. Renseigne par la scene,
 # qui seule connait la position du joueur.
 var underground := 0.0
+# 0 hors de l eau, 1 quand la camera est immergee. Meme origine : la scene.
+var underwater := 0.0
 
 # 0.0 = minuit, 0.25 = aube, 0.5 = midi, 0.75 = crepuscule.
 var time_of_day := 0.30
@@ -188,12 +205,24 @@ func apply() -> void:
 	ambient = ambient.lerp(CAVE_AMBIENT, cave)
 	fog = fog.lerp(CAVE_FOG, cave)
 	density *= 1.0 - cave * 0.85
+	var aerial := FOG_AERIAL * (1.0 - cave)
+	var sky_affect := FOG_SKY_AFFECT * (1.0 - cave)
+
+	# Sous l'eau, par-dessus tout le reste : c'est le milieu le plus proche de
+	# l'oeil, donc c'est lui qui gagne.
+	var water := clampf(underwater, 0.0, 1.0)
+	if water > 0.0:
+		ambient = ambient.lerp(WATER_AMBIENT, water)
+		fog = fog.lerp(WATER_FOG, water)
+		density = lerpf(density, WATER_FOG_DENSITY, water)
+		aerial *= 1.0 - water
+		sky_affect = lerpf(sky_affect, 1.0, water)
 
 	_environment.ambient_light_color = ambient
 	_environment.fog_light_color = fog
 	_environment.fog_density = density
-	_environment.fog_aerial_perspective = FOG_AERIAL * (1.0 - cave)
-	_environment.fog_sky_affect = FOG_SKY_AFFECT * (1.0 - cave)
+	_environment.fog_aerial_perspective = aerial
+	_environment.fog_sky_affect = sky_affect
 
 
 # Les trois astres. L'ordre de creation fixe leur indice LIGHT dans le shader.
