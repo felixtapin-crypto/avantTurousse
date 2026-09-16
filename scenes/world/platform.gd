@@ -12,6 +12,8 @@ extends StaticBody3D
 @export var height_variation: float = 5.0
 @export var edge_ratio: float = 0.85 # fraction de size/2 ou commence le rivage
 
+const BOTTOM_Y := -15.0 # jusqu'ou descendent les parois de falaise sur le pourtour
+
 # -1.0 dans ce tableau = pas de terrain a cette colonne (vide, on peut y tomber)
 var heights: PackedFloat32Array
 
@@ -74,38 +76,78 @@ func _build_heightmap(seed_value: int) -> void:
 			heights[index] = raw_height * edge_falloff
 
 
+func _quad_valid(x: int, z: int) -> bool:
+	if x < 0 or z < 0 or x >= size - 1 or z >= size - 1:
+		return false
+	return heights[z * size + x] >= 0.0 \
+		and heights[z * size + x + 1] >= 0.0 \
+		and heights[(z + 1) * size + x] >= 0.0 \
+		and heights[(z + 1) * size + x + 1] >= 0.0
+
+
+func _add_quad(surface: SurfaceTool, p00: Vector3, p01: Vector3, p10: Vector3, p11: Vector3) -> void:
+	surface.set_uv(Vector2(0, 0))
+	surface.add_vertex(p00)
+	surface.set_uv(Vector2(0, 1))
+	surface.add_vertex(p01)
+	surface.set_uv(Vector2(1, 0))
+	surface.add_vertex(p10)
+
+	surface.set_uv(Vector2(1, 0))
+	surface.add_vertex(p10)
+	surface.set_uv(Vector2(0, 1))
+	surface.add_vertex(p01)
+	surface.set_uv(Vector2(1, 1))
+	surface.add_vertex(p11)
+
+
+# Paroi verticale entre deux points du bord (haut) et le meme point ramene a
+# BOTTOM_Y (bas). Donne du volume a la plateforme la ou elle borde le vide,
+# au lieu d'un simple feuillet sans epaisseur.
+func _add_wall(surface: SurfaceTool, top_a: Vector3, top_b: Vector3) -> void:
+	var bottom_a := Vector3(top_a.x, BOTTOM_Y, top_a.z)
+	var bottom_b := Vector3(top_b.x, BOTTOM_Y, top_b.z)
+
+	surface.set_uv(Vector2(0, 0))
+	surface.add_vertex(top_a)
+	surface.set_uv(Vector2(1, 0))
+	surface.add_vertex(top_b)
+	surface.set_uv(Vector2(0, 1))
+	surface.add_vertex(bottom_a)
+
+	surface.set_uv(Vector2(1, 0))
+	surface.add_vertex(top_b)
+	surface.set_uv(Vector2(1, 1))
+	surface.add_vertex(bottom_b)
+	surface.set_uv(Vector2(0, 1))
+	surface.add_vertex(bottom_a)
+
+
 func _build_mesh() -> void:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	for z in range(size - 1):
 		for x in range(size - 1):
-			var h00 := heights[z * size + x]
-			var h10 := heights[z * size + x + 1]
-			var h01 := heights[(z + 1) * size + x]
-			var h11 := heights[(z + 1) * size + x + 1]
-			# si un des 4 coins est hors-plateforme, on ne pose pas de sol ici
-			if h00 < 0.0 or h10 < 0.0 or h01 < 0.0 or h11 < 0.0:
+			if not _quad_valid(x, z):
 				continue
 
-			var p00 := Vector3(x, h00, z)
-			var p10 := Vector3(x + 1, h10, z)
-			var p01 := Vector3(x, h01, z + 1)
-			var p11 := Vector3(x + 1, h11, z + 1)
+			var p00 := Vector3(x, heights[z * size + x], z)
+			var p10 := Vector3(x + 1, heights[z * size + x + 1], z)
+			var p01 := Vector3(x, heights[(z + 1) * size + x], z + 1)
+			var p11 := Vector3(x + 1, heights[(z + 1) * size + x + 1], z + 1)
 
-			surface.set_uv(Vector2(0, 0))
-			surface.add_vertex(p00)
-			surface.set_uv(Vector2(0, 1))
-			surface.add_vertex(p01)
-			surface.set_uv(Vector2(1, 0))
-			surface.add_vertex(p10)
+			_add_quad(surface, p00, p01, p10, p11)
 
-			surface.set_uv(Vector2(1, 0))
-			surface.add_vertex(p10)
-			surface.set_uv(Vector2(0, 1))
-			surface.add_vertex(p01)
-			surface.set_uv(Vector2(1, 1))
-			surface.add_vertex(p11)
+			# paroi de falaise partout ou le voisin est hors-plateforme
+			if not _quad_valid(x - 1, z):
+				_add_wall(surface, p00, p01)
+			if not _quad_valid(x + 1, z):
+				_add_wall(surface, p10, p11)
+			if not _quad_valid(x, z - 1):
+				_add_wall(surface, p00, p10)
+			if not _quad_valid(x, z + 1):
+				_add_wall(surface, p01, p11)
 
 	surface.generate_normals()
 	var array_mesh := surface.commit()
@@ -118,6 +160,14 @@ func _build_mesh() -> void:
 	mesh_instance.material_override = material
 	add_child(mesh_instance)
 
+	# backface_collision=true : la collision fonctionne des les deux faces du
+	# maillage, independamment du sens de rotation des triangles. Sans ca, un
+	# maillage genere avec le mauvais sens de rotation ne bloque rien quand on
+	# marche dessus depuis le dessus - exactement le bug "on passe au travers"
+	# rencontre en jeu.
+	var trimesh_shape := array_mesh.create_trimesh_shape() as ConcavePolygonShape3D
+	trimesh_shape.backface_collision = true
+
 	var collision_shape := CollisionShape3D.new()
-	collision_shape.shape = array_mesh.create_trimesh_shape()
+	collision_shape.shape = trimesh_shape
 	add_child(collision_shape)
