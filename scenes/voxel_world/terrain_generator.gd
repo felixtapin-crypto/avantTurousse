@@ -76,17 +76,26 @@ const SURFACE_SKIN := 2
 # lectures. Ils echantillonnent grossierement au loin, ce qui reintroduirait
 # des marches ; c'est le pinceau du shader qui les dissout, et les deux ne
 # valent qu'ensemble.
+# Quatre anneaux, jusqu'a DIX metres. Les anneaux lointains sont volontairement
+# peu ponderes : une matiere a dix metres ne pese que 8 % environ, ce qui ne
+# suffit pas a la faire apparaitre par elle-meme. Elle est juste PRESENTE parmi
+# les quatre emplacements, et c'est tout ce dont le pinceau a besoin pour la
+# faire surgir par plaques — l'elargissement du fondu se joue la, pas dans les
+# poids.
 const BLEND_KERNEL := [
-	0, 0, 12,
+	0, 0, 10,
 
-	2, 0, 6,   -2, 0, 6,   0, 2, 6,    0, -2, 6,
-	1, 1, 6,   1, -1, 6,   -1, 1, 6,   -1, -1, 6,
+	2, 0, 5,   -2, 0, 5,   0, 2, 5,    0, -2, 5,
+	1, 1, 5,   1, -1, 5,   -1, 1, 5,   -1, -1, 5,
 
 	4, 0, 3,   -4, 0, 3,   0, 4, 3,    0, -4, 3,
 	3, 3, 3,   3, -3, 3,   -3, 3, 3,   -3, -3, 3,
 
-	7, 0, 1,   -7, 0, 1,   0, 7, 1,    0, -7, 1,
-	5, 5, 1,   5, -5, 1,   -5, 5, 1,   -5, -5, 1,
+	7, 0, 2,   -7, 0, 2,   0, 7, 2,    0, -7, 2,
+	5, 5, 2,   5, -5, 2,   -5, 5, 2,   -5, -5, 2,
+
+	10, 0, 1,  -10, 0, 1,  0, 10, 1,   0, -10, 1,
+	7, 7, 1,   7, -7, 1,   -7, 7, 1,   -7, -7, 1,
 ]
 
 # Les tables sont construites A L'AFFECTATION de la carte, et surtout pas

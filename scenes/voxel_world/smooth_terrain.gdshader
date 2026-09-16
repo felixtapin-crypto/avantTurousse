@@ -75,7 +75,7 @@ uniform float u_macro_strength : hint_range(0.0, 1.0) = 0.22;
 uniform float u_height_influence : hint_range(0.0, 1.0) = 0.35;
 // Epaisseur de la zone ou deux matieres coexistent. Plus petit = bord plus
 // net, jusqu'a cliqueter.
-uniform float u_blend_depth : hint_range(0.01, 0.5) = 0.18;
+uniform float u_blend_depth : hint_range(0.01, 0.5) = 0.24;
 
 // --- Pinceau ---
 //
@@ -85,15 +85,23 @@ uniform float u_blend_depth : hint_range(0.01, 0.5) = 0.18;
 //
 // On fait donc DIVAGUER les poids avant de le calculer. La frontiere cesse de
 // suivre la ligne ou les poids s'egalisent — laquelle est lisse, et c'est
-// precisement ce qui la fait lire comme une decoupe — pour serpenter au gre
-// d'un bruit a deux octaves. L'une porte le trait, l'autre la frange.
+// precisement ce qui la fait lire comme une decoupe.
+//
+// TROIS octaves : le trait, la frange, le grain. Une seule donnait une limite
+// ondulante mais toujours CONTINUE, qu'on lisait encore comme un trace ; ce
+// sont les octaves fines qui la font se defaire en plaques.
 //
 // Le bruit est CENTRE sur zero : il deplace la limite sans favoriser aucune
-// matiere. Et son amplitude reste petite devant l'ecart entre 0 et 1, donc une
-// matiere absente ne peut pas surgir en plein milieu d'une zone pure — elle ne
-// divague que la ou les deux se disputent deja le terrain.
-uniform float u_brush_meters = 6.0;
-uniform float u_brush_strength : hint_range(0.0, 1.0) = 0.45;
+// matiere. Il ne peut pas non plus faire surgir une matiere au milieu d'une
+// zone pure, pour deux raisons qui se completent : `present` masque les
+// emplacements a poids nul, et une matiere absente du noyau de generation
+// n'occupe meme pas d'emplacement.
+//
+// C'est ce dernier point qui LIMITE le fondu, et c'est pourquoi la portee du
+// noyau (voir TerrainGenerator.BLEND_KERNEL) et la force du pinceau se reglent
+// ensemble : monter l'une sans l'autre ne donne rien.
+uniform float u_brush_meters = 9.0;
+uniform float u_brush_strength : hint_range(0.0, 1.0) = 0.60;
 
 varying vec3 v_world_pos;
 // `flat` est indispensable, pas une optimisation.
@@ -242,13 +250,18 @@ void fragment() {
 		value_noise(bp * 2.9 + 23.9),
 		value_noise(bp * 2.9 + 51.1),
 		value_noise(bp * 2.9 + 89.7));
+	vec4 grain = vec4(
+		value_noise(bp * 7.3 + 3.1),
+		value_noise(bp * 7.3 + 29.7),
+		value_noise(bp * 7.3 + 63.5),
+		value_noise(bp * 7.3 + 97.3));
 	// Masque des emplacements REELLEMENT occupes. Indispensable : les
 	// emplacements inutilises portent l'indice 0 — donc l'herbe — avec un poids
 	// nul, et le bruit du pinceau, qui est centre sur zero, suffirait a les
 	// faire franchir le seuil. On verrait de l'herbe apparaitre entre deux
 	// matieres qui n'en contiennent pas.
 	vec4 present = step(0.001, weights);
-	vec4 brushed = max(weights + (mix(brush, fringe, 0.4) - 0.5) * u_brush_strength, 0.0) * present;
+	vec4 brushed = max(weights + (mix(mix(brush, fringe, 0.4), grain, 0.22) - 0.5) * u_brush_strength, 0.0) * present;
 
 	vec4 mix_weights = height_blend(heights, brushed);
 
