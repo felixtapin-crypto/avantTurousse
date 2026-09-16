@@ -129,6 +129,32 @@ ce qui relie naturellement ce système à celui des artefacts.
   partie de plusieurs heures : à trancher ensemble (perte d'objets ? retour à
   un checkpoint ? simple malus temporaire ?).
 
+## Jardinage : cultiver sa nourriture
+
+En plus de la cueillette/chasse directe (voir "Flore et faune", qui reste
+la source de nourriture de base, toujours disponible), on peut **cultiver**
+pour avoir une source fiable et renouvelable sur la durée :
+
+1. **Préparer le sol** avec un outil dédié (houe/bêche) — à trouver sur la
+   plateforme, comme le briquet ou l'horloge (voir "La quête : artefacts,
+   indices, œuf"), pas fabriqué au début.
+2. **Planter** une graine ou une bouture récupérée en cueillant une plante
+   sauvage (une plante récoltée donne soit de la nourriture immédiate, soit
+   de quoi replanter, soit les deux selon l'espèce/le tag).
+3. **Arroser** régulièrement avec un seau rempli à une **source d'eau**
+   (point d'eau douce déjà prévu dans "Le monde : la plateforme" — sert
+   aussi à boire directement). Le seau est un deuxième outil à trouver.
+4. Attendre la pousse (durée en jours/cycles jour-nuit à calibrer), puis
+   récolter — la plante peut donner plusieurs récoltes ou une seule selon
+   l'espèce.
+
+Le jardinage n'est jamais obligatoire (cueillette/chasse suffisent pour ne
+pas mourir de faim), mais évite de dépendre uniquement de ce qu'on trouve
+au hasard sur une partie de plusieurs heures — utile en particulier si le
+régime du dragon (voir plus bas) demande un tag de nourriture rare ou
+difficile à trouver autrement : cultiver la bonne plante peut devenir la
+solution la plus fiable.
+
 ## Artisanat et outils
 
 - Ressources de base : bois (couper des arbres), pierre (creuser/miner),
