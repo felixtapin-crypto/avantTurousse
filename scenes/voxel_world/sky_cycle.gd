@@ -1,74 +1,70 @@
 class_name SkyCycle
 extends Node
 
-# Cycle jour/nuit : fait tourner le soleil, et fait suivre le ciel, la lumiere
-# et l'ambiante.
+# Cycle jour/nuit : fait decrire au soleil un arc selon l'heure, et fait suivre
+# le ciel, la lumiere, l'ambiante et le brouillard.
 #
-# Le ciel est le shader stylise de GDQuest (MIT, voir assets/sky/SOURCE.md).
-# Etant un `shader_type sky`, il lit la direction du soleil dans
-# `LIGHT0_DIRECTION` : faire tourner la DirectionalLight3D suffit a faire
-# tourner le ciel avec elle, sans rien lui transmettre.
+# Le ciel est `assets/sky/atmosphere.gdshader`, repris du projet terrain-3d de
+# Guillaume (voir assets/sky/SOURCE.md) : diffusion de Rayleigh/Mie/ozone
+# calculee sur une atmosphere spherique, nuages cumulus en ray-marching,
+# cirrus, et surtout des ASTRES.
 #
-# Les deux jeux de valeurs DAY et NIGHT sont repris des materiaux d'exemple du
-# projet d'origine ; le cycle interpole entre les deux.
+# Un `shader_type sky` lit les lumieres directionnelles de la scene sous les
+# noms LIGHT0..LIGHT3. Il suffit donc d'ajouter trois DirectionalLight3D pour
+# obtenir une lune et deux planetes : le shader dessine leur disque, a la
+# taille que donne `light_angular_distance`. C'est pour ca qu'elles sont creees
+# ici et pas dans la scene — leur ORDRE decide de leur indice, et le ciel n'a
+# aucun autre moyen de les distinguer.
 #
-# La couleur de l'horizon est traitee a part, avec une troisieme teinte chaude
-# au lever et au coucher. Sans elle, passer du jour a la nuit par simple
-# interpolation donne un ciel qui s'assombrit sans jamais rougeoyer — c'est le
-# reglage qui fait qu'on croit a l'heure qu'il est.
+# Trois points valent d'etre releves, parce qu'ils ne se devinent pas :
 #
-# Note : ce cycle est propre a la scene voxel. `scenes/world/day_night_cycle.gd`
-# reste celui de l'ancienne scene, et n'est pas touche.
+# - le soleil n'est JAMAIS cache. On met son energie a zero la nuit, mais le
+#   masquer le retirerait de LIGHT0 et le ciel perdrait la direction qui lui
+#   sert a calculer le couchant.
+# - l'ambiante est en mode COULEUR, pas SKY. Ce ciel est HDR : sa radiance de
+#   nuit reste assez forte pour eclairer le monde comme en plein jour.
+# - l'ambiante suit la clarte du CIEL, pas le soleil direct. La diffusion
+#   atmospherique garde le ciel clair bien apres que le soleil direct s'est
+#   eteint ; indexer l'ambiante sur le soleil donnait un ciel clair au-dessus
+#   d'un terrain deja noir.
 
-const SKY_SHADER := "res://assets/sky/stylized_sky.gdshader"
-const SHOOTING_STAR := "res://assets/sky/shooting_star_sampler.png"
+const SKY_SHADER := "res://assets/sky/atmosphere.gdshader"
+const MOON_TEXTURE := "res://assets/sky/moon.png"
 
-# Valeurs relevees dans day_sky.tres et night_sky.tres.
-const DAY := {
-	"clouds_smoothness": 0.03,
-	"clouds_light_color": Color(1.0, 1.0, 1.0),
-	"clouds_shadow_intensity": 3.5,
-	"high_clouds_density": 0.2,
-	"top_color": Color(0.349, 0.588, 1.0),
-	"bottom_color": Color(0.0, 0.329, 0.969),
-	"astro_tint": Color(0.906, 0.788, 0.627),
-	"astro_scale": 9.0,
-	"astro_intensity": 3.0,
-	"stars_intensity": 0.0,
-	"shooting_stars_intensity": 0.0,
-}
+# Palette reprise de la direction artistique de terrain-3d.
+const SUN_COLOR := Color(1.000, 0.945, 0.855)
+const SUN_HORIZON := Color(1.0, 0.6, 0.35)
+const AMBIENT_DAY := Color(0.545, 0.590, 0.665)
+const AMBIENT_DUSK := Color(0.280, 0.200, 0.180)
+const HORIZON := Color(0.700, 0.780, 0.855)
+const NIGHT_AMBIENT := Color(0.135, 0.160, 0.235)
+const NIGHT_FOG := Color(0.05, 0.07, 0.12)
 
-const NIGHT := {
-	"clouds_smoothness": 0.05,
-	"clouds_light_color": Color(0.227, 0.447, 1.0),
-	"clouds_shadow_intensity": 8.0,
-	"high_clouds_density": 0.0,
-	"top_color": Color(0.027, 0.102, 0.251),
-	"bottom_color": Color(0.027, 0.102, 0.251),
-	"astro_tint": Color(1.0, 1.0, 1.0),
-	"astro_scale": 6.0,
-	"astro_intensity": 1.2,
-	"stars_intensity": 5.0,
-	"shooting_stars_intensity": 4.0,
-}
+const MAX_SUN_ENERGY := 1.35
+# Azimut de l'arc solaire : oriente le lever et le coucher.
+const AZIMUTH_DEG := 35.0
 
-# Diffusion a l'horizon : grise en plein jour, violette la nuit, chaude au
-# ras du soleil.
-const SCATTER_DAY := Color(0.298, 0.298, 0.298)
-const SCATTER_NIGHT := Color(0.125, 0.086, 0.373)
-const SCATTER_HORIZON := Color(0.95, 0.42, 0.16)
+# Lune, grande planete, geante. La taille apparente vaut a peu pres
+# `light_angular_distance / moon_dist` ; le plafond de 90 degres explique la
+# distance courte de la troisieme.
+const MOON_SIZES := [24.0, 46.0, 90.0]
+const MOON_ENERGY := [0.55, 0.25, 0.25]
+# Tableaux ORDINAIRES, convertis en Packed* au moment de les transmettre :
+# `PackedFloat32Array(...)` n'est pas une expression constante en GDScript et
+# ne peut donc pas etre un `const` (meme piege que dans terrain_textures.gd).
+const MOON_DIST := [1400.0, 2600.0, 1000.0, 0.0]
+# Decale la lecture de la texture : les trois astres partagent la meme image,
+# et c'est ce decalage seul qui leur donne trois visages differents.
+const MOON_UV_OFFSET := [0.62, 0.8, -0.435]
 
-const SUN_DAY := Color(1.0, 0.96, 0.89)
-const SUN_HORIZON := Color(1.0, 0.62, 0.34)
-const MOON := Color(0.52, 0.62, 0.85)
-
-const SUN_ENERGY_DAY := 1.1
-const SUN_ENERGY_NIGHT := 0.04
-const AMBIENT_DAY := 0.85
-const AMBIENT_NIGHT := 0.30
-# Inclinaison de l'axe du soleil : sans elle il passe au zenith exact et les
-# ombres disparaissent a midi.
-const SUN_TILT := -38.0
+# Perspective aerienne : les plans lointains prennent la couleur du ciel. C'est
+# ce reglage, plus que la distance de vue, qui donne sa profondeur au paysage
+# de terrain-3d — et il vaut d'autant plus ici que le relief voxel se simplifie
+# au loin avec le niveau de detail.
+const FOG_DENSITY := 0.0016
+const FOG_AERIAL := 0.85
+const FOG_SUN_SCATTER := 0.30
+const FOG_SKY_AFFECT := 0.8
 
 # 0.0 = minuit, 0.25 = aube, 0.5 = midi, 0.75 = crepuscule.
 var time_of_day := 0.30
@@ -78,19 +74,32 @@ var paused := false
 var _sun: DirectionalLight3D
 var _environment: Environment
 var _sky_material: ShaderMaterial
+var _moons: Array[DirectionalLight3D] = []
 
 
 func setup(sun: DirectionalLight3D, environment: Environment) -> void:
 	_sun = sun
 	_environment = environment
 	_sky_material = _build_sky_material()
+	_create_moons()
 
 	var sky := Sky.new()
 	sky.sky_material = _sky_material
 	_environment.background_mode = Environment.BG_SKY
 	_environment.sky = sky
-	_environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	# Ambiante par COULEUR : cf. l'entete. Le ciel sert au REFLET (l'eau en a
+	# besoin), pas a l'eclairage ambiant.
+	_environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_environment.ambient_light_energy = 1.0
 	_environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+
+	_environment.fog_enabled = true
+	_environment.fog_light_color = HORIZON
+	_environment.fog_sun_scatter = FOG_SUN_SCATTER
+	_environment.fog_density = FOG_DENSITY
+	_environment.fog_aerial_perspective = FOG_AERIAL
+	_environment.fog_sky_affect = FOG_SKY_AFFECT
+
 	apply()
 
 
@@ -112,85 +121,159 @@ func apply() -> void:
 	if _sun == null:
 		return
 
-	# Hauteur du soleil : -1 a minuit, +1 a midi, 0 pile a l'horizon.
-	var sun_height := -cos(time_of_day * TAU)
-	# Le jour s'installe vite une fois le soleil leve : une interpolation
-	# lineaire sur la hauteur du soleil laissait le monde dans la penombre
-	# jusqu'a la mi-matinee, alors que l'horloge affichait sept heures.
-	var day := smoothstep(-0.05, 0.28, sun_height)
-	# Etroit autour de l'horizon : c'est la fenetre du lever et du coucher.
-	var horizon := 1.0 - clampf(absf(sun_height) * 3.2, 0.0, 1.0)
+	# Position du soleil sur son arc. A minuit il est sous l'horizon, a midi au
+	# zenith ; l'azimut incline l'arc pour que le soleil ne passe pas par le
+	# zenith exact, sans quoi les ombres disparaissent a midi.
+	var angle := time_of_day * TAU - PI * 0.5
+	var az := deg_to_rad(AZIMUTH_DEG)
+	var ca := cos(angle)
+	var sun_pos := Vector3(ca * cos(az), sin(angle), ca * sin(az))
+	var up := Vector3.UP if absf(sun_pos.y) < 0.98 else Vector3(0.0, 0.0, 1.0)
 
-	_sun.rotation_degrees = Vector3((time_of_day - 0.25) * 360.0, SUN_TILT, 0.0)
-	_sun.light_energy = lerpf(SUN_ENERGY_NIGHT, SUN_ENERGY_DAY, day)
-	_sun.light_color = MOON.lerp(SUN_DAY, day).lerp(SUN_HORIZON, horizon * 0.8)
-	# Sous l'horizon, le soleil eclairerait le terrain par en dessous.
-	_sun.visible = sun_height > -0.08
+	if _sun.is_inside_tree():
+		_sun.look_at(_sun.global_position - sun_pos, up)
+	# La lune est a l'OPPOSE du soleil : pleine et haute au milieu de la nuit.
+	if _moons.size() > 0 and _moons[0].is_inside_tree():
+		_moons[0].look_at(_moons[0].global_position + sun_pos, up)
 
-	_environment.ambient_light_energy = lerpf(AMBIENT_NIGHT, AMBIENT_DAY, day)
+	# Soleil DIRECT : s'eteint des que le disque passe sous l'horizon.
+	var day := smoothstep(-0.08, 0.25, sun_pos.y)
+	# Clarte du CIEL : s'etend plus bas sous l'horizon, parce que l'atmosphere
+	# continue de diffuser apres le coucher. C'est elle qui pilote l'ambiante.
+	var sky_light := smoothstep(-0.28, 0.15, sun_pos.y)
 
-	for key in DAY.keys():
-		var night_value = NIGHT[key]
-		var day_value = DAY[key]
-		if day_value is Color:
-			_sky_material.set_shader_parameter(key, (night_value as Color).lerp(day_value, day))
-		else:
-			_sky_material.set_shader_parameter(key, lerpf(night_value, day_value, day))
+	_sun.light_energy = day * MAX_SUN_ENERGY
+	var low := 1.0 - clampf(sun_pos.y * 2.5, 0.0, 1.0)
+	_sun.light_color = SUN_COLOR.lerp(SUN_HORIZON, low * day)
 
-	var scatter := SCATTER_NIGHT.lerp(SCATTER_DAY, day).lerp(SCATTER_HORIZON, horizon)
-	_sky_material.set_shader_parameter("sun_scatter", scatter)
+	# La lune ne doit eclairer que la nuit. Sans cette modulation elle rasait le
+	# monde au couchant, a pleine energie.
+	if _moons.size() > 0:
+		_moons[0].light_energy = MOON_ENERGY[0] * (1.0 - clampf(sky_light, 0.0, 1.0))
+
+	# Ambiante : nuit bleutee -> jour. Puis une bosse chaude au crepuscule,
+	# quand le ciel est encore clair mais le soleil direct deja eteint.
+	var ambient := NIGHT_AMBIENT.lerp(AMBIENT_DAY, sky_light)
+	ambient = ambient.lerp(AMBIENT_DUSK, sky_light * (1.0 - day) * 0.5)
+	_environment.ambient_light_color = ambient
+
+	# Le brouillard suit le meme mouvement : le voile clair du jour flotterait
+	# sur une scene nocturne sombre.
+	_environment.fog_light_color = NIGHT_FOG.lerp(HORIZON, sky_light)
+	_environment.fog_density = lerpf(FOG_DENSITY * 0.5, FOG_DENSITY, sky_light)
 
 
-# Les textures du ciel (formes de nuages, nuages hauts, courbe de densite,
-# disque solaire) sont des bruits et des degrades : les construire coute moins
-# cher que de les versionner, et elles restent lisibles ici plutot que cachees
-# dans un .tres.
+# Les trois astres. L'ordre de creation fixe leur indice LIGHT dans le shader.
+func _create_moons() -> void:
+	var texture := load(MOON_TEXTURE)
+	_sky_material.set_shader_parameter("moon_textures", [texture, texture, texture])
+	_sky_material.set_shader_parameter("moon_dist", PackedFloat32Array(MOON_DIST))
+	_sky_material.set_shader_parameter("moon_uv_x_offset", PackedFloat32Array(MOON_UV_OFFSET))
+
+	for i in 3:
+		var moon := DirectionalLight3D.new()
+		moon.name = "Moon%d" % (i + 1)
+		moon.light_angular_distance = MOON_SIZES[i]
+		moon.light_energy = MOON_ENERGY[i]
+		# Seule la lune eclaire. Les deux planetes sont en SKY_ONLY : leur
+		# energie ne fait que rendre leur disque visible, sans quoi on aurait
+		# trois soleils.
+		moon.sky_mode = (DirectionalLight3D.SKY_MODE_LIGHT_AND_SKY if i == 0
+			else DirectionalLight3D.SKY_MODE_SKY_ONLY)
+		moon.shadow_enabled = false
+		add_child(moon)
+		_moons.append(moon)
+
+	# Lumiere lunaire franchement froide : c'est ce qui fait lire la nuit comme
+	# une nuit plutot que comme un jour sous-expose.
+	_moons[0].light_color = Color(0.55, 0.66, 0.95)
+	# Le speculaire de la lune sur la mer est le seul reflet que ce monde se
+	# permette, mais bride : voir `grazing_roughness` dans sea.gdshader.
+	_moons[0].light_specular = 0.25
+	_moons[2].light_color = Color(0.62, 0.70, 0.86)
+	# Orientations fixes, bien ecartees. Seule la lune suit le soleil.
+	_moons[1].rotation_degrees = Vector3(-52.0, 55.0, 0.0)
+	_moons[2].rotation_degrees = Vector3(-42.0, -120.0, 0.0)
+
+
+# Les textures du ciel sont des bruits : les construire coute moins cher que de
+# les versionner, et les reglages restent lisibles ici plutot que caches dans
+# un .tres. Les valeurs sont celles de materials/sky_material.tres.
+#
+# La seule piece qui manque est le fond d'etoiles, une cubemap HDR de 48 Mo que
+# je n'ai pas versionnee. L'uniforme est `hint_default_black` : sans elle le
+# ciel de nuit est simplement depourvu d'etoiles, les astres restent la.
 func _build_sky_material() -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = load(SKY_SHADER)
 
-	material.set_shader_parameter("clouds_samples", 32)
-	material.set_shader_parameter("shadow_sample", 4)
-	material.set_shader_parameter("clouds_density", 0.4)
-	material.set_shader_parameter("clouds_scale", 1.0)
-	material.set_shader_parameter("cloud_shape_sampler", _noise(10, -1))
-	material.set_shader_parameter("cloud_noise_sampler", _noise(5, -1))
-	material.set_shader_parameter("high_clouds_sampler", _noise(5, FastNoiseLite.TYPE_PERLIN))
-	material.set_shader_parameter("cloud_curves", _density_curve())
-	material.set_shader_parameter("astro_sampler", _astro_disc())
-	material.set_shader_parameter("shooting_star_sampler", load(SHOOTING_STAR))
-	material.set_shader_parameter("shooting_star_tint", Color(1.0, 0.663, 0.42))
+	material.set_shader_parameter("atmosphere_sample_count", 24)
+	material.set_shader_parameter("exposure", 13.0)
+	material.set_shader_parameter("sundisc_intensity", 30.0)
+	material.set_shader_parameter("stars_exposure", 3.0)
+
+	# Nuages cumulus, en ray-marching.
+	material.set_shader_parameter("coverage", 0.35)
+	material.set_shader_parameter("cloud_smoothness", 0.05)
+	material.set_shader_parameter("cloud_marches", 32)
+	material.set_shader_parameter("density_coeff", 1.5)
+	material.set_shader_parameter("light_strength", 25.0)
+	material.set_shader_parameter("clouds_anisotropy_factor", 0.15)
+	material.set_shader_parameter("cloud_base_color", Color(0.765, 0.789, 0.859))
+	material.set_shader_parameter("cloud_overcast_color", Color(0.765, 0.788, 0.859))
+	material.set_shader_parameter("cloud_color_texture", _noise_2d(0, 0.0))
+	material.set_shader_parameter("cloud_noise_factor", 0.2)
+	# `invert` sur la forme : le bruit cellulaire donne des cellules sombres
+	# separees par des cretes claires, c'est l'inverse qu'on veut en nuage.
+	material.set_shader_parameter("cloud_shape", _noise_3d(FastNoiseLite.TYPE_CELLULAR, 0.0231, true))
+	material.set_shader_parameter("cloud_shape_size", 3.0)
+	material.set_shader_parameter("cloud_noise", _noise_3d(FastNoiseLite.TYPE_SIMPLEX, 0.0285, false))
+	material.set_shader_parameter("cloud_noise_size", 12.0)
+	# Trou au zenith : sans lui la couche de nuages se referme juste au-dessus
+	# du joueur et le ciel n'a plus de fond.
+	material.set_shader_parameter("hole_in_center", true)
+	material.set_shader_parameter("hole_radius", 5.0)
+	material.set_shader_parameter("hole_feather", 10.0)
+
+	# Cirrus : la couche haute, etiree par `cirrus_squish`.
+	material.set_shader_parameter("use_cirrus", true)
+	material.set_shader_parameter("cirrus_texture", _noise_2d(0, 0.3, 3))
+	material.set_shader_parameter("cirrus_squish", Vector2(4.0, 1.0))
+	material.set_shader_parameter("cirrus_scale", 0.2)
+	material.set_shader_parameter("cirrus_treshold", 0.8)
+	material.set_shader_parameter("cirrus_distortion_texture", _noise_2d(2, 0.3, 1))
+	material.set_shader_parameter("cirrus_distortion_scale", 0.04)
+	material.set_shader_parameter("cirrus_distortion_offset", Vector2(0.4, 0.0))
+	material.set_shader_parameter("cirrus_mask_texture", _noise_2d(2, 0.3, 1))
+	material.set_shader_parameter("cirrus_mask_scale", 0.05)
+	material.set_shader_parameter("cirrus_opacity", 0.2)
+
+	material.set_shader_parameter("moon_glow_boost", 1.7)
 	return material
 
 
-func _noise(octaves: int, type: int) -> NoiseTexture2D:
+func _noise_2d(seed_value: int, skirt: float, octaves: int = 0) -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
-	noise.fractal_octaves = octaves
-	if type >= 0:
-		noise.noise_type = type
+	noise.seed = seed_value
+	if octaves > 0:
+		noise.fractal_octaves = octaves
 	var texture := NoiseTexture2D.new()
 	texture.seamless = true
+	if skirt > 0.0:
+		texture.seamless_blend_skirt = skirt
 	texture.noise = noise
 	return texture
 
 
-func _density_curve() -> CurveTexture:
-	var curve := Curve.new()
-	curve.add_point(Vector2(0.0, 0.0), 0.0, 10.0)
-	curve.add_point(Vector2(0.1, 1.0))
-	curve.add_point(Vector2(1.0, 0.8), -0.222, 0.0)
-	var texture := CurveTexture.new()
-	texture.texture_mode = CurveTexture.TEXTURE_MODE_RED
-	texture.curve = curve
-	return texture
-
-
-func _astro_disc() -> GradientTexture2D:
-	var gradient := Gradient.new()
-	gradient.offsets = PackedFloat32Array([0.48, 0.6])
-	gradient.colors = PackedColorArray([Color(1, 1, 1, 1), Color(1, 1, 1, 0)])
-	var texture := GradientTexture2D.new()
-	texture.gradient = gradient
-	texture.fill = GradientTexture2D.FILL_RADIAL
-	texture.fill_from = Vector2(0.5, 0.5)
+func _noise_3d(type: int, frequency: float, invert: bool) -> NoiseTexture3D:
+	var noise := FastNoiseLite.new()
+	noise.noise_type = type
+	noise.frequency = frequency
+	var texture := NoiseTexture3D.new()
+	texture.width = 128
+	texture.height = 128
+	texture.depth = 128
+	texture.seamless = true
+	texture.invert = invert
+	texture.noise = noise
 	return texture

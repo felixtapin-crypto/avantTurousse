@@ -1,166 +1,122 @@
-// Surface de la mer.
+// Repris tel quel de `shaders/water.gdshader` du projet terrain-3d de
+// Guillaume, qui en est l'auteur. Il remplace le shader d'`Infinite Ocean`
+// utilise jusqu'ici : celui-ci tire sa transparence de la REFRACTION et non
+// d'un alpha, ce qui supprime le raccord pale et laiteux qu'on avait au
+// rivage, et son `grazing_roughness` empeche la mer de renvoyer le disque
+// lunaire en tache cramee.
 //
-// `ocean_pos` etait un `global uniform`, declare dans les reglages du projet.
-// Il devient ici un uniforme ordinaire, renseigne chaque frame par `sea.gd` :
-// `project.godot` est liste dans TASKS.md parmi les fichiers sensibles aux
-// conflits, et une variable de shader ne justifie pas d'y toucher.
+// Il ne deplace aucun sommet : voir `sea.gd`, dont le plan s'en trouve
+// beaucoup plus simple.
 //
-// L'attenuation par la profondeur (loi de Beer) et l'ecume de bord font plus
-// que decorer : un plan plat qui traverse un relief presque coplanaire
-// produisait du moucheton de z-fighting tout le long de la cote, et c'est ce
-// degrade qui l'efface.
-
+// Eau réaliste pour un grand plan (Terrain3D ne fournit pas d'eau).
+// - Couleur par profondeur (peu profond -> profond) via DEPTH_TEXTURE.
+// - Normales animées (2 couches de normalmap qui défilent) -> vaguelettes.
+// - Écume aux rives (là où l'eau est peu profonde au-dessus du terrain).
+// - Réflexion du ciel : roughness faible + fresnel (Godot reflète l'environnement).
+// - Transparence croissante avec la profondeur.
 shader_type spatial;
-// Ajout : transparence et pas d'ecriture de profondeur.
+// cull_disabled : la surface reste visible VUE DE DESSOUS (sinon l'eau disparaît quand on
+// passe sous la mer). L'effet "sous l'eau" (teinte + brouillard) est géré par world/underwater.gd.
+render_mode blend_mix, depth_draw_always, cull_disabled, specular_schlick_ggx;
+
+uniform vec3 color_shallow : source_color = vec3(0.10, 0.38, 0.44);
+uniform vec3 color_deep : source_color = vec3(0.02, 0.11, 0.19);
+uniform float depth_fade = 6.0;        // profondeur (m) pour atteindre color_deep (teinte)
+uniform float beer_depth = 8.0;        // profondeur (m) de VISIBILITÉ (absorption Beer-Lambert)
+
+uniform sampler2D normalmap : hint_normal;
+uniform float uv_scale = 0.05;
+uniform vec2 flow_a = vec2(0.020, 0.014);
+uniform vec2 flow_b = vec2(-0.016, 0.021);
+uniform float normal_strength = 0.5;
+// Rugosité un peu élevée : sinon l'eau quasi-miroir reflète le disque lunaire/solaire HDR
+// comme une énorme traînée blanche cramée. Ici -> scintillement doux, reflet du ciel diffus.
+uniform float water_roughness : hint_range(0.0, 1.0) = 0.30;
+
+// Rugosité aux angles RASANTS, c'est-à-dire au loin vers l'horizon. Elle sert à raviver les reflets
+// de ciel et de soleil, qui sont ce qui donne sa vie à une mer vue de loin.
 //
-// Sans ces deux modes, le plan est OPAQUE et ecrit dans le tampon de
-// profondeur. Comme nos plages sont plates et exactement au niveau de la mer,
-// il se retrouve coplanaire avec elles sur de larges etendues, et toute la
-// zone se couvre de moucheton de z-fighting.
-render_mode blend_mix, depth_draw_never, cull_back;
+// ⚠ ELLE ÉTAIT À 0.06, SOIT UN QUASI-MIROIR, et la lune y laissait une tache CRAMÉE. En PBR le
+// spéculaire vient aussi de la radiance de l'environnement : l'eau reflétait le DISQUE lunaire que
+// `atmosphere.gdshader` dessine dans le ciel — et celui-ci est délibérément surbrillé
+// (`moon_glow_boost = 1.7`, « disque plus lumineux (rayonne) »). À 0.06 ce disque se reflétait
+// quasi intact, franchissait `glow_hdr_threshold` et bloomait en blob blanc avec sa traînée.
+//
+// ⚠ ET `light_specular` SUR LA LUNE N'Y CHANGE RIEN : il ne borne que le spéculaire de la LUMIÈRE,
+// pas le reflet de l'environnement. C'est le test de l'utilisateur qui l'a établi — désactiver
+// l'astre dans les réglages faisait disparaître le reflet, or cela met son énergie à 0, ce qui le
+// retire aussi DU CIEL (`SKY_MODE_LIGHT_AND_SKY`). Le coupable était donc le ciel, pas la lampe.
+//
+// 0.18 garde le raffermissement à l'horizon — la mer reste plus nette au loin qu'à ses pieds — mais
+// étale le disque lunaire en sentier au lieu d'un point. Une vraie mer n'est de toute façon jamais
+// un miroir à distance : la houle s'en charge.
+uniform float grazing_roughness : hint_range(0.0, 0.5) = 0.18;
 
-// Depth texture uniform required in Godot 4.3+
-uniform sampler2D DEPTH_TEXTURE : hint_depth_texture, filter_linear_mipmap;
-// Screen texture uniform required in Godot 4.3+
-uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, filter_linear_mipmap;
+uniform vec3 foam_color : source_color = vec3(0.90, 0.95, 1.0);
+uniform float foam_depth = 1.3;        // épaisseur d'eau sous laquelle apparaît l'écume
+uniform float fresnel_power = 5.0;
 
-uniform vec3 ocean_pos; // Position du joueur, renseignee par sea.gd
+uniform sampler2D depth_tex : hint_depth_texture, filter_linear_mipmap;
+// Réfraction : la scène rendue DERRIÈRE l'eau (on l'échantillonne avec des UV décalés par la normale).
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
+uniform float refraction_strength : hint_range(0.0, 0.15) = 0.04;
 
-uniform vec3 albedo : source_color = vec3(0.0,0.32,0.43);
-uniform vec3 albedo2 : source_color = vec3(0.0,0.47,0.76);
-uniform float metallic : hint_range(0.0, 1.0) = 0;
-uniform float roughness : hint_range(0.0, 1.0) = 0.02;
-uniform sampler2D wave; // Noise wave texture
-uniform sampler2D wave_bump; // Normal bump map version of the noise wave texture
-uniform sampler2D texture_normal; // Additional normal noise
-uniform sampler2D texture_normal2; // Additional normal noise
-uniform vec2 wave_direction = vec2(0.5,-0.2); // Direction of wave 1
-uniform vec2 wave_direction2 = vec2(-0.5,0.5); // Direction of wave 2
-uniform float time_scale : hint_range(0.0, 0.2, 0.005) = 0.1; // Rate of movement multiplied by TIME
-uniform float noise_scale = 20.0; // Scale of the wave noise texture
-uniform float height_scale = 2.0; // Mulitply the normal height values
-
-// Depth color
-uniform vec3 color_deep : source_color = vec3(0.11,0.29,0.33); // Deep depth color
-uniform vec3 color_shallow : source_color = vec3(0.0,0.47,0.76); // Shallow depth color
-uniform float beers_law = 2.0; // Beer's law application
-uniform float depth_offset = 1.5; // Offset
-
-// Edge detection
-uniform float edge_scale = 0.3;
-uniform float near = 1.0;
-uniform float far = 100.0;
-uniform vec3 edge_color : source_color = vec3(1.0,1.0,1.0);
-// Ajout : largeur du fondu au rivage. L'eau devient transparente la ou elle
-// est tres peu profonde, ce qui efface la ligne de coupe entre le plan et le
-// relief au lieu de la souligner.
-uniform float shore_fade = 4.0;
-
-// Varying variables
-varying float height;
 varying vec3 world_pos;
-varying float vertex_distance;
-varying float vertex_distance_clamped;
-varying vec2 vertex_pos;
-
-float fresnel(float amount, vec3 normal, vec3 view)
-{
-	return pow((1.0 - clamp(dot(normalize(normal), normalize(view)), 0.0, 1.0 )), amount);
-}
-
-float edge(float depth){
-	depth = 2.0 * depth - 1.0;
-	return near * far / (far + depth * (near - far));
-}
-
-float waveheight(vec2 offset, int mode) {
-	float h1 = 0.0; // Wave1 texture height
-	float h2 = 0.0; // Wave2 texture height
-	float hmix = 0.0; // Wave texture heights mixed
-	switch (mode) {
-		case 0: // For getting only the Wave1 height
-			h1 = texture(wave, (world_pos.xz + offset) / noise_scale + (TIME * wave_direction) * time_scale).r;
-			return h1;
-		case 1: // For getting only the Wave2 height
-			h2 = texture(wave, (world_pos.xz + offset) / noise_scale + (TIME * wave_direction2) * time_scale).r;
-			return h2;
-		case 2: // For getting both Wave1 and Wave2 heights and getting the average
-			h1 = texture(wave, (world_pos.xz + offset) / noise_scale + (TIME * wave_direction) * time_scale).r;
-			h2 = texture(wave, (world_pos.xz + offset) / noise_scale + (TIME * wave_direction2) * time_scale).r;
-			hmix = mix(h1, h2, 0.5);
-			return hmix;
-	}
-}
 
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	
-	vertex_distance = distance(world_pos,ocean_pos);
-	vertex_distance = clamp(vertex_distance, 0.0, 85.0);
-	vertex_distance_clamped = vertex_distance / 85.0;
-	
-	float prev_height_x = waveheight(vec2(-0.3,0.0),2);
-	float next_height_x = waveheight(vec2(0.3,0.0),2);
-	float prev_height_y = waveheight(vec2(0.0,-0.3),2);
-	float next_height_y = waveheight(vec2(0.0,0.3),2);
-	float height_mix = waveheight(vec2(0.0,0.0),2);
-	
-	VERTEX.y += height_mix * height_scale * (1.0 - vertex_distance_clamped);
-	
-	float fraction_x = fract(round(UV.x * 1000.0) / 10.0);
-	float fraction_y = fract(round(UV.y * 1000.0) / 10.0);
-	if (fraction_x != 0.0) {
-		if (fract(UV.y) == 0.0) {
-			VERTEX.y = ((prev_height_x + next_height_x) * height_scale * (1.0 - vertex_distance_clamped)) / 2.0;
-		}
-	}
-	if (fraction_y != 0.0) {
-		if (fract(UV.x) == 0.0) {
-			VERTEX.y = ((prev_height_y + next_height_y) * height_scale * (1.0 - vertex_distance_clamped)) / 2.0;
-		}
-	}
 }
 
 void fragment() {
-	// Depth variables and calc
-	float depth_texture = texture(DEPTH_TEXTURE, SCREEN_UV).r * 2.0 - 1.0;
-	float depth = PROJECTION_MATRIX[3][2] / (depth_texture + PROJECTION_MATRIX[2][2]);
-	float depth_blend = exp((depth+VERTEX.z + depth_offset) * -beers_law);
-	depth_blend = clamp(1.0 - depth_blend, 0.0, 1.0);	
-	float depth_blend_power = clamp(pow(depth_blend, 2.5), 0.0, 1.0);
+	// --- Normales animées (3 couches, dont une FINE pour casser le reflet des astres en
+	//     scintillement/glitter au lieu d'une traînée blanche continue) ---
+	vec2 uv = world_pos.xz * uv_scale;
+	vec3 na = texture(normalmap, uv + TIME * flow_a).xyz * 2.0 - 1.0;
+	vec3 nb = texture(normalmap, uv * 1.37 + TIME * flow_b).xyz * 2.0 - 1.0;
+	vec3 nc = texture(normalmap, uv * 4.3 - TIME * flow_a * 2.1).xyz * 2.0 - 1.0;  // fine
+	vec3 n = normalize(na + nb + nc * 0.5);
+	NORMAL_MAP = n * 0.5 + 0.5;
+	NORMAL_MAP_DEPTH = normal_strength;
 
-	// Retrieving depth color and applying the deep and shallow colors
-	vec3 screen_color = textureLod(SCREEN_TEXTURE, SCREEN_UV, depth_blend_power * 2.5).rgb;
-	vec3 depth_color = mix(color_shallow.rgb, color_deep.rgb, depth_blend_power);
-	vec3 color = mix(screen_color * depth_color, depth_color * 0.25, depth_blend_power * 0.5);
-	
-	// Getting edge depth calc
-	float z_depth = edge(texture(DEPTH_TEXTURE, SCREEN_UV).x);
-	float z_pos = edge(FRAGCOORD.z);
-	float z_dif = z_depth - z_pos;
-	
-	// Time calculations for wave (normal map) movement
-	vec2 time = (TIME * wave_direction) * time_scale; // Movement rate of first wave
-	vec2 time2 = (TIME * wave_direction2) * time_scale; // Movement rate of second wave
-	
-	// Blend normal maps into one
-	vec3 normal_blend = mix(texture(texture_normal,world_pos.xz / 10.0 + time / 10.0).rgb, texture(texture_normal2,world_pos.xz / 10.0 + time2 / 10.0).rgb, 0.5);
-	
-	// Blend Wave1 and Wave2 maps
-	vec3 wave_normal_blend = mix(texture(wave_bump, world_pos.xz / noise_scale + time).xyz,texture(wave_bump, world_pos.xz / noise_scale + time2).xyz,0.3);
-	
-	// Calculate Fresnel
-	float fresnel = fresnel(5.0, NORMAL, VIEW);
-	vec3 surface_color = mix(albedo, albedo2, fresnel); // Interpolate albedo values by frensel
-	
-	// Add Edge Color to Surface Color Albedo
-	vec3 depth_color_adj = mix(edge_color, color, step(edge_scale, z_dif));
-	
-	ALBEDO = clamp(surface_color + depth_color_adj,vec3(0.0),vec3(1.0));
-	METALLIC = metallic;
-	ROUGHNESS = roughness;
-	NORMAL_MAP = mix(wave_normal_blend, normal_blend, 0.5);
-	SPECULAR = wave_normal_blend.r;
-	// Ajout : cf. shore_fade.
-	ALPHA = clamp(depth_blend * shore_fade + 0.12, 0.0, 1.0);
+	// --- Profondeur d'eau (distance surface -> fond opaque) ---
+	float raw = texture(depth_tex, SCREEN_UV).r;
+	vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, raw);
+	vec4 vpos = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
+	vpos.xyz /= vpos.w;
+	float scene_z = -vpos.z;      // distance vue du fond
+	float surf_z = -VERTEX.z;     // distance vue de la surface d'eau
+	float water_depth = max(scene_z - surf_z, 0.0);
+
+	// --- Réfraction : scène DERRIÈRE l'eau, UV décalés par la normale des vaguelettes ---
+	vec2 refr_uv = clamp(SCREEN_UV + n.xy * refraction_strength, vec2(0.002), vec2(0.998));
+	// Guard anti-halo : si le point réfracté est DEVANT la surface d'eau, on annule le décalage.
+	float rraw = texture(depth_tex, refr_uv).r;
+	vec4 rpos = INV_PROJECTION_MATRIX * vec4(vec3(refr_uv * 2.0 - 1.0, rraw), 1.0);
+	rpos.xyz /= rpos.w;
+	if (-rpos.z < surf_z) {
+		refr_uv = SCREEN_UV;
+	}
+	vec3 behind = texture(screen_tex, refr_uv).rgb;
+
+	// --- Transparence physique : absorption Beer-Lambert. Le fond réfracté fond vers la teinte d'eau
+	//     (peu profond -> profond) avec la profondeur : limpide en surface, teinte d'eau au fond. ---
+	float transmit = exp(-water_depth / max(beer_depth, 0.1));
+	vec3 water_tint = mix(color_shallow, color_deep, clamp(water_depth / depth_fade, 0.0, 1.0));
+	vec3 col = mix(water_tint, behind, transmit);
+
+	// --- Écume aux rives ---
+	float foam = 1.0 - smoothstep(0.0, foam_depth, water_depth);
+	foam *= 0.6 + 0.4 * (na.x + nb.y);   // un peu de variation via les normales
+	col = mix(col, foam_color, clamp(foam, 0.0, 1.0) * 0.85);
+
+	// --- Fresnel (bords plus réfléchissants) ---
+	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), fresnel_power);
+
+	ALBEDO = col;
+	METALLIC = 0.0;
+	ROUGHNESS = mix(water_roughness, grazing_roughness, fres);   // + net aux angles rasants
+	SPECULAR = 0.5;
+	// OPAQUE : le "voir à travers" vient de la RÉFRACTION (screen_tex), plus de l'alpha. Au bord très
+	// peu profond, transmit->1 et col->fond -> raccord doux avec le sable (pas de ligne dure).
+	ALPHA = 1.0;
 }

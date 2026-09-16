@@ -3,10 +3,21 @@ extends SceneTree
 # Capture d'ecran automatique, pour diagnostiquer le rendu sans avoir a
 # decrire ce qu'on voit.
 #
-#   godot --path . --script res://scripts/capture.gd -- <scene> <secondes> <sortie>
+#   godot --path . --script res://scripts/capture.gd \
+#     -- <scene> <secondes> <sortie> [heure] [site] [azimut]
 #
 # Outil de mise au point, pas de production : il instancie la scene demandee,
 # laisse le streaming remplir le terrain, puis enregistre le tampon d'image.
+#
+# `heure` est facultative, en fraction de journee (0 = minuit, 0.5 = midi).
+# Quand elle est donnee, le cycle est aussi FIGE : sans cela les secondes
+# d'attente feraient deriver l'heure, et on ne capturerait pas celle qu'on a
+# demandee.
+#
+# `site` et `azimut` orientent la camera, en degres (site positif = vers le
+# haut). Sans eux on ne voit que l'horizon, ce qui suffit pour le terrain mais
+# laisse hors cadre tout ce qui vit en hauteur — la lune et les planetes, par
+# exemple, qui culminent au milieu de la nuit.
 
 const DEFAULT_SCENE := "res://scenes/voxel_world/smooth_voxel_world.tscn"
 const DEFAULT_DELAY := 14.0
@@ -17,6 +28,11 @@ func _initialize() -> void:
 	var scene_path: String = args[0] if args.size() > 0 else DEFAULT_SCENE
 	var delay: float = float(args[1]) if args.size() > 1 else DEFAULT_DELAY
 	var out_path: String = args[2] if args.size() > 2 else "user://capture.png"
+	if args.size() > 3:
+		WorldSettings.start_time_of_day = fposmod(float(args[3]), 1.0)
+		WorldSettings.day_length_seconds = 1.0e9
+	var pitch: float = float(args[4]) if args.size() > 4 else NAN
+	var yaw: float = float(args[5]) if args.size() > 5 else 0.0
 
 	var packed := load(scene_path)
 	if packed == null:
@@ -24,11 +40,16 @@ func _initialize() -> void:
 		quit(1)
 		return
 	root.add_child(packed.instantiate())
-	_capture(delay, out_path)
+	_capture(delay, out_path, pitch, yaw)
 
 
-func _capture(delay: float, out_path: String) -> void:
+func _capture(delay: float, out_path: String, pitch: float, yaw: float) -> void:
 	await create_timer(delay).timeout
+	# L'orientation est posee APRES l'attente : le joueur reprend la main sur sa
+	# camera des qu'il recoit une entree, et rien ne garantit qu'il n'ait pas
+	# initialise la sienne entre-temps.
+	if not is_nan(pitch):
+		_aim(pitch, yaw)
 	# Une frame de plus apres le reveil : le tampon lu doit etre celui d'une
 	# image entierement dessinee.
 	await process_frame
@@ -39,3 +60,15 @@ func _capture(delay: float, out_path: String) -> void:
 	else:
 		printerr("echec d'ecriture (%d)" % error)
 	quit(0)
+
+
+# Oriente la premiere camera trouvee. On ecrit la rotation GLOBALE parce que la
+# camera est en general fille du joueur, qui porte deja son propre lacet : une
+# rotation locale s'y ajouterait au lieu de la remplacer.
+func _aim(pitch: float, yaw: float) -> void:
+	var cameras := root.find_children("*", "Camera3D", true, false)
+	if cameras.is_empty():
+		printerr("aucune Camera3D dans la scene")
+		return
+	var camera := cameras[0] as Camera3D
+	camera.global_rotation = Vector3(deg_to_rad(pitch), deg_to_rad(yaw), 0.0)

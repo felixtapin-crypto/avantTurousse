@@ -92,7 +92,9 @@ func _add_sea() -> void:
 	_sea = Sea.new()
 	_sea.name = "Sea"
 	add_child(_sea)
-	_sea.setup(player, float(WorldMap.SEA_LEVEL))
+	# Centre de la carte : le terrain occupe [0, map_size] en X et en Z.
+	var center := Vector3(float(map_size) * 0.5, 0.0, float(map_size) * 0.5)
+	_sea.setup(center, float(WorldMap.SEA_LEVEL))
 
 
 # Le ciel et le soleil sont pilotes par l'heure du jour. Le shader de ciel lit

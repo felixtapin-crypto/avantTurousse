@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b1m7vlesp1mmo"
-path="res://.godot/imported/shooting_star_sampler.png-a77367913bb845f04a0fd0073d35fb41.ctex"
+uid="uid://dc360c3t4h2c3"
+path="res://.godot/imported/moon.png-049ea1b4976859199f87e8acf155b80a.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/sky/shooting_star_sampler.png"
-dest_files=["res://.godot/imported/shooting_star_sampler.png-a77367913bb845f04a0fd0073d35fb41.ctex"]
+source_file="res://assets/sky/moon.png"
+dest_files=["res://.godot/imported/moon.png-049ea1b4976859199f87e8acf155b80a.ctex"]
 
 [params]
 
