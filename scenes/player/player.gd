@@ -40,6 +40,8 @@ var block_count := 5
 var _arrival_start: Vector3
 var _arrival_target: Vector3
 var _glider: Node3D = null
+var _rain: GPUParticles3D
+var _was_raining := false
 
 
 func _ready() -> void:
@@ -57,6 +59,7 @@ func _ready() -> void:
 	camera.current = is_multiplayer_authority()
 	hud.visible = is_multiplayer_authority()
 	_update_hud()
+	_rain = _build_rain()
 
 	if is_multiplayer_authority():
 		_play_arrival_sequence()
@@ -111,14 +114,22 @@ func _physics_process(delta: float) -> void:
 
 # Le viseur passe en couleur vive des qu'une cible valide (a portee,
 # reellement touchee par le rayon) est dans le champ, pour qu'on sache tout
-# de suite si un clic va faire quelque chose ou non.
+# de suite si un clic va faire quelque chose ou non. On en profite pour
+# activer/desactiver la pluie locale selon la meteo partagee (World.is_raining,
+# calculee independamment par chaque pair mais identique au meme instant).
 func _process(_delta: float) -> void:
 	if not is_multiplayer_authority() or not arrived:
 		return
+
 	var has_target := not _raycast().is_empty()
 	var color := CROSSHAIR_TARGET_COLOR if has_target else CROSSHAIR_IDLE_COLOR
 	crosshair_h.color = color
 	crosshair_v.color = color
+
+	var raining: bool = world.is_raining()
+	if raining != _was_raining:
+		_rain.emitting = raining
+		_was_raining = raining
 
 
 # Creuse la colonne visee (baisse sa hauteur de 1m) et recupere un bloc.
@@ -209,6 +220,37 @@ func _play_arrival_sequence() -> void:
 func _arrival_step(t: float) -> void:
 	position = _arrival_start.lerp(_arrival_target, t)
 	camera.look_at(_arrival_target + Vector3(0, 1.0, 0), Vector3.UP)
+
+
+# Pluie locale qui suit le joueur (emetteur enfant du personnage), pour
+# donner l'impression qu'il pleut partout sur la plateforme sans avoir a
+# couvrir toute sa surface d'un seul systeme de particules. Le booleen
+# "pleut-il" vient de World.is_raining() ; l'effet visuel lui-meme n'est pas
+# reseau - chaque joueur affiche sa propre pluie autour de lui.
+func _build_rain() -> GPUParticles3D:
+	var particles := GPUParticles3D.new()
+	particles.amount = 200
+	particles.lifetime = 1.5
+	particles.emitting = false
+	particles.visibility_aabb = AABB(Vector3(-12, -14, -12), Vector3(24, 24, 24))
+
+	var material := ParticleProcessMaterial.new()
+	material.direction = Vector3(0, -1, 0)
+	material.spread = 5.0
+	material.initial_velocity_min = 12.0
+	material.initial_velocity_max = 16.0
+	material.gravity = Vector3.ZERO
+	material.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	material.emission_box_extents = Vector3(10.0, 0.5, 10.0)
+	particles.process_material = material
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.03, 0.4)
+	particles.draw_pass_1 = quad
+
+	particles.position = Vector3(0, 10, 0)
+	add_child(particles)
+	return particles
 
 
 func _shake_camera() -> Tween:

@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scenes/world/world.gd" id="WorldScript"]
 [ext_resource type="Script" path="res://scenes/world/platform.gd" id="PlatformScript"]
+[ext_resource type="Script" path="res://scenes/world/day_night_cycle.gd" id="DayNightCycleScript"]
+[ext_resource type="Script" path="res://scenes/world/clouds.gd" id="CloudsScript"]
 
 [node name="World" type="Node3D"]
 script = ExtResource("WorldScript")
@@ -10,6 +12,16 @@ script = ExtResource("WorldScript")
 position = Vector3(0, 40, 0)
 rotation_degrees = Vector3(-45, -30, 0)
 shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="DayNightCycle" type="Node" parent="."]
+script = ExtResource("DayNightCycleScript")
+sun_path = NodePath("../DirectionalLight3D")
+environment_path = NodePath("../WorldEnvironment")
+
+[node name="Clouds" type="Node3D" parent="."]
+script = ExtResource("CloudsScript")
 
 [node name="Platform" type="StaticBody3D" parent="."]
 script = ExtResource("PlatformScript")

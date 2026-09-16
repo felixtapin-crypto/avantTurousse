@@ -9,6 +9,14 @@ const PLATFORM_SEED := 1
 
 const FALL_LIMIT_Y := -30.0
 
+# Seed fixe pour que la meteo suive la meme fonction chez tout le monde (voir
+# is_raining) - ce n'est PAS pour rendre la meteo identique a chaque partie,
+# juste pour que les deux joueurs d'une meme partie voient toujours la meme
+# meteo au meme moment, sans echanger le moindre message reseau pour ca.
+const WEATHER_SEED := 8734
+const WEATHER_FREQUENCY := 0.02   # vitesse de changement de la meteo
+const RAIN_THRESHOLD := 0.35      # au-dessus de ce seuil de bruit, il pleut
+
 @onready var platform: Platform = $Platform
 @onready var players_root: Node3D = $Players
 @onready var wrecks_root: Node3D = $Wrecks
@@ -16,10 +24,12 @@ const FALL_LIMIT_Y := -30.0
 @onready var game_over_panel: Control = $GameOverLayer/GameOverPanel
 
 var game_over := false
+var _weather_noise := FastNoiseLite.new()
 
 
 func _ready() -> void:
 	platform.generate(PLATFORM_SEED)
+	_weather_noise.seed = WEATHER_SEED
 
 	spawner.spawn_path = players_root.get_path()
 	spawner.spawn_function = _spawn_player
@@ -69,6 +79,16 @@ func _trigger_game_over() -> void:
 func _on_quit_pressed() -> void:
 	Network.leave_game()
 	get_tree().change_scene_to_file("res://scenes/main_menu/main_menu.tscn")
+
+
+# Fonction de l'heure reelle du systeme (pas du temps ecoule depuis le
+# chargement) : chaque joueur calcule la meme chose au meme instant sans
+# avoir besoin de se synchroniser. Purement visuel pour l'instant (pluie a
+# l'ecran) - le jour ou la meteo affecte des jauges de survie partagees,
+# il faudra probablement une version faisant autorite cote hote a la place.
+func is_raining() -> bool:
+	var t := Time.get_unix_time_from_system() * WEATHER_FREQUENCY
+	return _weather_noise.get_noise_1d(t) > RAIN_THRESHOLD
 
 
 # Garde une trace visuelle de l'atterrissage de chaque joueur : l'engin volant
