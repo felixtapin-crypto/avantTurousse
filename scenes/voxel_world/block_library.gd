@@ -29,6 +29,7 @@ enum Type {
 	SAND,
 	GRAVEL,
 	SNOW,
+	WATER,
 }
 
 const PALETTE_PATH := "res://assets/kaykit/block_bits/block_bits_texture.png"
@@ -41,6 +42,7 @@ const UV: Dictionary = {
 	Type.SAND: Vector2(0.9203, 0.2201),       # #CE9965
 	Type.GRAVEL: Vector2(0.2953, 0.2244),     # #596064
 	Type.SNOW: Vector2(0.1399, 0.1037),       # #DCE1E4
+	Type.WATER: Vector2(0.1072, 0.8022),      # #28A1DA
 }
 
 # Repli si un type solide n'a pas d'entree dans UV (ne devrait pas arriver,
@@ -50,28 +52,42 @@ const FALLBACK_UV := Vector2(0.3435, 0.2154)
 # Blocs que le joueur ne peut pas retirer.
 #
 # STONE_DARK joue le role de la bedrock de Minecraft. La generation en pose
-# les DARK_STONE_DEPTH couches du fond de la quille (voir VoxelData), ce qui
-# scelle le dessous de l'ile : on ne peut pas la percer de part en part, ni
-# se creuser une sortie vers le vide sous ses propres pieds. C'est une
-# protection utile sur une plateforme flottante ou tomber est mortel.
+# les BEDROCK_DEPTH couches du fond de la carte (voir VoxelData), ce qui
+# scelle le bas du monde : on ne peut pas le percer de part en part, et les
+# grottes ne le traversent pas non plus.
 const INDESTRUCTIBLE: Array[int] = [Type.STONE_DARK]
 
 
 static func is_solid(type: int) -> bool:
-	return type != Type.AIR
+	return type != Type.AIR and type != Type.WATER
+
+
+static func is_liquid(type: int) -> bool:
+	return type == Type.WATER
+
+
+# Un bloc transparent ne cache pas son voisin : une face solide doit etre
+# emise face a de l'air ET face a de l'eau, sinon le fond marin serait
+# invisible des qu'on regarde dedans. L'eau, elle, ne s'emet que face a
+# l'air (voir VoxelMesher) : sans ca, chaque voxel d'eau dessinerait ses
+# faces internes contre ses voisins d'eau.
+static func is_transparent(type: int) -> bool:
+	return type == Type.AIR or type == Type.WATER
 
 
 static func is_breakable(type: int) -> bool:
-	return is_solid(type) and not INDESTRUCTIBLE.has(type)
+	if not is_solid(type):
+		return false # ni l'air ni l'eau ne se creusent
+	return not INDESTRUCTIBLE.has(type)
 
 
 static func uv_for(type: int) -> Vector2:
 	return UV.get(type, FALLBACK_UV)
 
 
-# Materiau partage par tous les chunks. Un seul materiau pour tout le terrain
-# (et, plus tard, pour les props KayKit) : la palette etant une texture
-# unique, il n'y a aucune raison d'en avoir plusieurs.
+# Materiau du terrain. Un seul materiau pour tous les chunks (et, plus tard,
+# pour les props KayKit) : la palette etant une texture unique, il n'y a
+# aucune raison d'en avoir plusieurs.
 static func build_material() -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_texture = load(PALETTE_PATH)
@@ -79,4 +95,19 @@ static func build_material() -> StandardMaterial3D:
 	# vient de l'eclairage directionnel sur des faces plates.
 	material.metallic = 0.0
 	material.roughness = 1.0
+	return material
+
+
+# Materiau de la mer, separe du terrain pour trois raisons : il est
+# translucide, il ne doit pas etre occulte par le tri de transparence du
+# terrain opaque, et il est rendu des deux cotes — seule la face du dessus
+# est generee, donc sans CULL_DISABLED la surface disparait vue de dessous.
+static func build_water_material() -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_texture = load(PALETTE_PATH)
+	material.albedo_color = Color(1.0, 1.0, 1.0, 0.62)
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.metallic = 0.0
+	material.roughness = 0.15
 	return material
