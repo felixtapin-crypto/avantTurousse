@@ -94,11 +94,20 @@ func _add_sea() -> void:
 	mesh.size = Vector2(float(map_size), float(map_size))
 	plane.mesh = mesh
 
+	# Une surface peu rugueuse ne vaut que par ce qu'elle reflete. Sans source
+	# de reflexion, la mer rendait en gris ardoise et ses aretes franches sur
+	# le relief passaient pour du z-fighting ; l'Environnement fournit
+	# desormais le ciel (`reflected_light_source`).
 	var material := StandardMaterial3D.new()
 	material.albedo_color = TerrainMaterials.COLOR[TerrainMaterials.Type.WATER]
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.roughness = 0.1
+	material.roughness = 0.04
+	material.metallic = 0.25
+	# Le bord de l'eau s'eclaircit a l'incidence rasante, comme une vraie
+	# surface d'eau : c'est ce qui la distingue d'une dalle translucide.
+	material.rim_enabled = true
+	material.rim = 0.6
 	plane.material_override = material
 	plane.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
