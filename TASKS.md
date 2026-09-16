@@ -45,6 +45,12 @@ tâches plus petites au fur et à mesure :
 - [ ] Vraie grille de voxels 3D (grottes naturelles, structures avec un
   toit separe du sol) — le systeme actuel ne fait que monter/descendre la
   hauteur d'une colonne, pas de veritable volume
+- [ ] Jour/nuit et meteo : passer sur une horloge/etat faisant autorite
+  cote hote (avec sync reseau) le jour ou ça doit influer sur des jauges
+  de survie partagees — pour l'instant chaque pair calcule independamment
+  (voir `day_night_cycle.gd` et `World.is_raining`), ce qui est correct
+  seulement tant que c'est purement cosmetique
+- [ ] Meteo : faire reagir les nuages (plus denses/sombres quand il pleut)
 - [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
 - [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler
 - [ ] Construction d'abri (pose de blocs)
@@ -113,3 +119,9 @@ tâches plus petites au fur et à mesure :
   creuser/construire ne laisse plus de tour/puits a pic, l'exces glisse
   vers les colonnes voisines (bidirectionnel, porte a quelques colonnes
   autour du point touche).
+- 2026-09-16 — Cycle jour/nuit (soleil + ciel qui changent de couleur,
+  ~15 min/cycle), nuages qui derivent, et pluie partagee (meme meteo chez
+  les deux joueurs sans echange reseau, basee sur l'heure reelle). Tout ça
+  est calcule independamment par chaque pair pour l'instant — voir la
+  tache "faire autorite cote hote" ci-dessus si ça doit un jour toucher
+  des jauges de survie partagees.
