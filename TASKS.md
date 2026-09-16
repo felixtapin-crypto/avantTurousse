@@ -36,9 +36,10 @@ _(vide pour l'instant — ajoutez une ligne quand vous démarrez quelque chose)_
 Repris de la feuille de route dans `DESIGN.md` — à affiner/découper en
 tâches plus petites au fur et à mesure :
 
-- [ ] Caméra 3e personne (le contrôleur actuel est encore en vue FPS)
 - [ ] Casser/poser des voxels + inventaire minimal
 - [ ] Biomes sur la plateforme générée (forêt, rocher, point d'eau...)
+- [ ] Caméra : ajouter un SpringArm3D pour éviter que la caméra 3e
+  personne traverse les murs/le terrain aux angles extrêmes
 - [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
 - [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler
 - [ ] Construction d'abri (pose de blocs)
@@ -81,3 +82,6 @@ tâches plus petites au fur et à mesure :
   dessous du terrain). Sens inverse dans `Platform._add_quad`, et
   `cull_mode = CULL_DISABLED` sur le materiau pour ne plus avoir a se
   soucier du sens exact des 4 orientations de parois de falaise.
+- 2026-09-16 — Camera passee en 3e personne (CameraPivot + Camera3D
+  decale derriere/au-dessus, voir `scenes/player/player.gd`). Pas encore
+  de SpringArm3D pour eviter le clipping dans le decor, note en tache.
