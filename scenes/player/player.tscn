@@ -77,6 +77,14 @@ offset_bottom = 16.0
 mouse_filter = 2
 color = Color(0.2, 0.5, 0.8, 1)
 
+[node name="SeedLabel" type="Label" parent="Hud"]
+offset_left = 16.0
+offset_top = 124.0
+offset_right = 200.0
+offset_bottom = 148.0
+mouse_filter = 2
+text = "Graines : 0"
+
 [node name="MessageLabel" type="Label" parent="Hud"]
 visible = false
 anchor_left = 0.5

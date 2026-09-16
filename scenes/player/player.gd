@@ -33,6 +33,7 @@ const BAR_FULL_WIDTH := 150.0
 @onready var hunger_fill: ColorRect = $Hud/HungerBarBg/HungerBarFill
 @onready var thirst_fill: ColorRect = $Hud/ThirstBarBg/ThirstBarFill
 @onready var message_label: Label = $Hud/MessageLabel
+@onready var seed_label: Label = $Hud/SeedLabel
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -60,6 +61,18 @@ var has_clock := false
 # (meme mecanisme, pas un objet qu'on se passe physiquement) - a
 # rediscuter si on veut plutot un objet unique porte par un seul joueur.
 var has_harvest_tool := false
+
+# Idem pour la houe (prepare le sol, voir _dig) et le seau (transporte de
+# l'eau, voir _dig quand on est sur de l'eau et Player._interact_farm_plot).
+# bucket_full indique si le seau, une fois trouve, contient de l'eau.
+var has_hoe := false
+var has_bucket := false
+var bucket_full := false
+
+# Graines/boutures : recuperees en recoltant une plante sauvage (une partie
+# du temps) ou une parcelle cultivee arrivee a maturite ; consommees pour
+# planter sur une parcelle labouree. Voir DESIGN.md, "Jardinage".
+var seed_count := 0
 
 # Jauges de survie (voir DESIGN.md, "Boucle de survie"). Ce qui se passe a 0
 # reste une question ouverte (pas de penalite implementee pour l'instant).
@@ -172,12 +185,16 @@ func _process(delta: float) -> void:
 	thirst_fill.size.x = BAR_FULL_WIDTH * (thirst / 100.0)
 
 
-# Boire (si on est sur de l'eau), ramasser un Collectible, recolter une
-# FoodPlant (si on a l'outil), ou creuser la colonne visee (baisse sa
-# hauteur de 1m, +1 bloc) - dans cet ordre de priorite.
+# Boire + remplir le seau (si on est sur de l'eau), ramasser un Collectible,
+# recolter une FoodPlant (si on a l'outil), agir sur une FarmPlot visee,
+# labourer la colonne visee (si on a la houe), ou creuser (baisse la colonne
+# visee de 1m, +1 bloc) - dans cet ordre de priorite.
 func _dig() -> void:
 	if world.is_over_water(position.x, position.z):
 		thirst = minf(100.0, thirst + DRINK_THIRST_RESTORE)
+		if has_bucket and not bucket_full:
+			bucket_full = true
+			_show_message("Seau rempli.")
 		return
 
 	var hit := _raycast()
@@ -195,12 +212,52 @@ func _dig() -> void:
 			return
 		collider.harvest.rpc()
 		hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
+		seed_count += 1
+		_update_hud()
+		return
+
+	if collider is FarmPlot:
+		_interact_farm_plot(collider)
+		return
+
+	if has_hoe:
+		var till_column := _hit_to_column(hit)
+		world.till_soil.rpc(till_column.x, till_column.y)
 		return
 
 	var column := _hit_to_column(hit)
 	world_platform.request_edit.rpc(column.x, column.y, -1)
 	block_count += 1
 	_update_hud()
+
+
+# Comportement different selon l'etat de la parcelle visee (voir
+# FarmPlot.State) : planter, arroser, attendre, ou recolter.
+func _interact_farm_plot(plot: FarmPlot) -> void:
+	match plot.state:
+		FarmPlot.State.EMPTY:
+			if seed_count <= 0:
+				_show_message("Pas de graine à planter.")
+				return
+			plot.plant.rpc()
+			seed_count -= 1
+			_update_hud()
+		FarmPlot.State.PLANTED:
+			if not (has_bucket and bucket_full):
+				_show_message("Il faut un seau rempli d'eau.")
+				return
+			plot.water.rpc()
+			bucket_full = false
+		FarmPlot.State.GROWING:
+			_show_message("Ça pousse encore...")
+		FarmPlot.State.READY:
+			if not has_harvest_tool:
+				_show_message("Il faut un outil de récolte.")
+				return
+			plot.harvest.rpc()
+			hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
+			seed_count += 1
+			_update_hud()
 
 
 # Appele par Collectible.pick_up() sur l'instance locale faisant autorite
@@ -217,6 +274,16 @@ func unlock_clock() -> void:
 func unlock_harvest_tool() -> void:
 	has_harvest_tool = true
 	_show_message("Outil de récolte trouvé !")
+
+
+func unlock_hoe() -> void:
+	has_hoe = true
+	_show_message("Houe trouvée !")
+
+
+func unlock_bucket() -> void:
+	has_bucket = true
+	_show_message("Seau trouvé !")
 
 
 # Construit sur la colonne visee (monte sa hauteur de 1m), si on a un bloc.
@@ -249,6 +316,7 @@ func _hit_to_column(hit: Dictionary) -> Vector2i:
 
 func _update_hud() -> void:
 	block_label.text = "Blocs : %d" % block_count
+	seed_label.text = "Graines : %d" % seed_count
 
 
 func _format_time(time_of_day: float) -> String:
