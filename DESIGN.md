@@ -106,16 +106,22 @@ jeu où la pression vient surtout de la survie et de la quête, pas du combat.
 Une variante hostile reste une option pour plus tard (voir "Questions
 ouvertes").
 
-Récolte : cueillette pour la flore, chasse/pêche pour la faune. Certaines
+Récolte : cueillette pour la flore, chasse/pêche pour la faune. La
+cueillette (plante sauvage ou cultivée, voir "Jardinage") demande un
+**outil de récolte** dédié — à trouver sur la plateforme comme les autres
+outils (houe, seau, briquet), pas disponible dès le départ. Certaines
 ressources rares peuvent elles-mêmes faire partie d'un gabarit d'énigme
 (ex. "il faut trouver le poisson qui ne vit que près de la falaise rouge"),
 ce qui relie naturellement ce système à celui des artefacts.
 
 ## Boucle de survie
 
-- **Faim / soif** : jauges qui descendent avec le temps et l'effort (courir,
-  creuser). Se reconstituent en mangeant (flore/faune récoltée, cuite ou non
-  selon la ressource) et buvant (point d'eau, ou eau bouillie/plus sûre).
+- **Faim** : jauge qui descend avec le temps et l'effort (courir, creuser).
+  Se reconstitue en mangeant (flore/faune récoltée, cuite ou non selon la
+  ressource — voir l'outil de récolte plus haut).
+- **Soif** : même principe, se reconstitue en buvant à une source d'eau
+  (voir "Sources d'eau" dans "Le monde : la plateforme"), ou eau
+  bouillie/plus sûre.
 - **Cycle jour/nuit** : la nuit est plus dangereuse (froid accru, visibilité
   réduite). Durée d'un cycle à calibrer en playtest (proposition de départ :
   ~15-20 min réelles par cycle complet).
@@ -128,6 +134,33 @@ ce qui relie naturellement ce système à celui des artefacts.
 - Mourir de faim/froid ne doit pas être punitif au point de casser une
   partie de plusieurs heures : à trancher ensemble (perte d'objets ? retour à
   un checkpoint ? simple malus temporaire ?).
+
+## Jardinage : cultiver sa nourriture
+
+En plus de la cueillette/chasse directe (voir "Flore et faune", qui reste
+la source de nourriture de base, toujours disponible), on peut **cultiver**
+pour avoir une source fiable et renouvelable sur la durée :
+
+1. **Préparer le sol** avec un outil dédié (houe/bêche) — à trouver sur la
+   plateforme, comme le briquet ou l'horloge (voir "La quête : artefacts,
+   indices, œuf"), pas fabriqué au début.
+2. **Planter** une graine ou une bouture récupérée en cueillant une plante
+   sauvage (une plante récoltée donne soit de la nourriture immédiate, soit
+   de quoi replanter, soit les deux selon l'espèce/le tag).
+3. **Arroser** régulièrement avec un seau rempli à une **source d'eau**
+   (point d'eau douce déjà prévu dans "Le monde : la plateforme" — sert
+   aussi à boire directement). Le seau est un deuxième outil à trouver.
+4. Attendre la pousse (durée en jours/cycles jour-nuit à calibrer), puis
+   récolter avec le même **outil de récolte** que pour les plantes
+   sauvages (voir "Flore et faune") — la plante peut donner plusieurs
+   récoltes ou une seule selon l'espèce.
+
+Le jardinage n'est jamais obligatoire (cueillette/chasse suffisent pour ne
+pas mourir de faim), mais évite de dépendre uniquement de ce qu'on trouve
+au hasard sur une partie de plusieurs heures — utile en particulier si le
+régime du dragon (voir plus bas) demande un tag de nourriture rare ou
+difficile à trouver autrement : cultiver la bonne plante peut devenir la
+solution la plus fiable.
 
 ## Artisanat et outils
 
