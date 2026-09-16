@@ -14,6 +14,7 @@ extends RefCounted
 const LAYERS: Array[Dictionary] = [
 	{"name": "Biomes", "id": "biomes"},
 	{"name": "Relief", "id": "relief"},
+	{"name": "Planeite", "id": "flatness"},
 	{"name": "Temperature", "id": "temperature"},
 	{"name": "Humidite", "id": "moisture"},
 	{"name": "Latitude / equateur", "id": "latitude"},
@@ -91,6 +92,18 @@ static func _color_at(map: WorldMap, layer: String, x: int, z: int, max_log_flow
 			var band := clampf(float(height - WorldMap.SEA_LEVEL) / 26.0, 0.0, 1.0)
 			return Color(0.32, 0.45, 0.26).lerp(Color(0.92, 0.88, 0.80), band) * shade
 
+		"flatness":
+			if submerged:
+				return SEA_DEEP * 0.6
+			var slope := map.slope_at(x, z)
+			# Deux tons francs plutot qu'un degrade : la question posee est
+			# binaire — peut-on s'installer ici, oui ou non. Un degre de gris
+			# obligerait a juger une nuance, la tache verte se repere.
+			if slope <= WorldMap.FLAT_SLOPE:
+				return Color("#7ee08a")
+			return Color("#243028").lerp(Color("#7a5f45"),
+				clampf((slope - WorldMap.FLAT_SLOPE) / 1.6, 0.0, 1.0))
+
 		"temperature":
 			if submerged:
 				return SEA_DEEP * 0.6
@@ -167,6 +180,8 @@ static func legend(layer_index: int) -> String:
 			return "  ".join(parts)
 		"relief":
 			return "Altitude du sol, eclairee depuis le nord-ouest. Les vallees en arete de poisson sont l'oeuvre de l'incision fluviale, pas du bruit."
+		"flatness":
+			return "[color=#7ee08a]■[/color] terrain plat, pente sous %.2f — c'est la qu'on peut s'installer et batir. Les taches sombres sont trop pentues." % WorldMap.FLAT_SLOPE
 		"temperature":
 			return "[color=#3344bf]■[/color] froid  →  [color=#d94026]■[/color] chaud. Combine la latitude et le refroidissement par l'altitude."
 		"moisture":

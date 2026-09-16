@@ -35,8 +35,9 @@ var _busy := false
 var _preview: TextureRect
 var _legend: RichTextLabel
 var _status: Label
-var _seed_label: Label
+var _seed_edit: LineEdit
 var _land_value: Label
+var _flat_value: Label
 var _layer_buttons: Array[Button] = []
 var _size_buttons: Array[Button] = []
 var _biome_rows: VBoxContainer
@@ -131,18 +132,30 @@ func _build_side_column() -> Control:
 	side.custom_minimum_size = Vector2(320, 0)
 	side.add_theme_constant_override("separation", 10)
 
-	side.add_child(_caption("SEED"))
-	_seed_label = _label("1", 46, INK)
-	side.add_child(_seed_label)
+	side.add_child(_caption("SEED — MODIFIABLE"))
+	# Champ de saisie et non simple libelle : une seed qui donne un bon monde
+	# doit pouvoir etre notee puis ressaisie, sinon la retrouver demande de
+	# tirer au hasard jusqu'a retomber dessus.
+	_seed_edit = LineEdit.new()
+	_seed_edit.text = str(WorldSettings.seed_value)
+	_seed_edit.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_seed_edit.add_theme_font_size_override("font_size", 40)
+	_seed_edit.add_theme_color_override("font_color", INK)
+	_seed_edit.add_theme_color_override("caret_color", GOLD)
+	_seed_edit.add_theme_stylebox_override("normal", _flat(Color(INK, 0.06), 4))
+	_seed_edit.add_theme_stylebox_override("focus", _flat(Color(GOLD, 0.18), 4))
+	_seed_edit.text_submitted.connect(_on_seed_submitted)
+	side.add_child(_seed_edit)
 
 	var seed_row := HBoxContainer.new()
 	seed_row.add_theme_constant_override("separation", 6)
-	var reroll := _pill("Tirer une autre seed")
+	var reroll := _pill("Au hasard")
 	reroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reroll.pressed.connect(_on_reroll)
 	seed_row.add_child(reroll)
-	var again := _pill("Relancer")
-	again.pressed.connect(func(): _regenerate())
+	var again := _pill("Generer")
+	again.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	again.pressed.connect(_on_seed_entered)
 	seed_row.add_child(again)
 	side.add_child(seed_row)
 
@@ -160,9 +173,24 @@ func _build_side_column() -> Control:
 	side.add_child(size_row)
 
 	side.add_child(_gap(10))
-	side.add_child(_caption("TERRES EMERGEES"))
-	_land_value = _label("—", 34, LAGOON)
-	side.add_child(_land_value)
+	var figures := HBoxContainer.new()
+	figures.add_theme_constant_override("separation", 18)
+
+	var land_box := VBoxContainer.new()
+	land_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	land_box.add_child(_caption("TERRES EMERGEES"))
+	_land_value = _label("—", 30, LAGOON)
+	land_box.add_child(_land_value)
+	figures.add_child(land_box)
+
+	var flat_box := VBoxContainer.new()
+	flat_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	flat_box.add_child(_caption("TERRAIN PLAT"))
+	_flat_value = _label("—", 30, Color("#7ee08a"))
+	flat_box.add_child(_flat_value)
+	figures.add_child(flat_box)
+
+	side.add_child(figures)
 
 	side.add_child(_gap(10))
 	side.add_child(_caption("BIOMES"))
@@ -272,7 +300,27 @@ func _select_size(index: int) -> void:
 
 func _on_reroll() -> void:
 	WorldSettings.seed_value = randi() % 1000000
+	_seed_edit.text = str(WorldSettings.seed_value)
 	_regenerate()
+
+
+# Une seed saisie a la main peut etre n'importe quoi : on prend la valeur
+# entiere si le texte en contient une, et le hachage du texte sinon, ce qui
+# accepte aussi bien "421" qu'un mot comme nom de monde.
+func _on_seed_entered() -> void:
+	var text := _seed_edit.text.strip_edges()
+	if text.is_valid_int():
+		WorldSettings.seed_value = absi(text.to_int())
+	elif text.is_empty():
+		WorldSettings.seed_value = 1
+	else:
+		WorldSettings.seed_value = absi(hash(text))
+	_seed_edit.text = str(WorldSettings.seed_value)
+	_regenerate()
+
+
+func _on_seed_submitted(_text: String) -> void:
+	_on_seed_entered()
 
 
 func _on_play() -> void:
@@ -289,7 +337,7 @@ func _regenerate() -> void:
 		return
 	_busy = true
 	_play_button.disabled = true
-	_seed_label.text = str(WorldSettings.seed_value)
+	_seed_edit.text = str(WorldSettings.seed_value)
 	_status.text = "Generation du monde %d x %d..." % [WorldSettings.size, WorldSettings.size]
 	# Une frame pour que le libelle s'affiche : la generation est synchrone et
 	# fige la fenetre plusieurs secondes.
@@ -324,15 +372,22 @@ func _refresh_stats() -> void:
 
 	var counts := {}
 	var land := 0
+	var flat := 0
 	for z in _map.size_xz:
 		for x in _map.size_xz:
 			var biome := _map.biome_at(x, z)
 			counts[biome] = int(counts.get(biome, 0)) + 1
-			if _map.terrain_height(x, z) > WorldMap.SEA_LEVEL:
-				land += 1
+			if _map.terrain_height(x, z) <= WorldMap.SEA_LEVEL:
+				continue
+			land += 1
+			if _map.slope_at(x, z) <= WorldMap.FLAT_SLOPE:
+				flat += 1
 
 	var total := _map.size_xz * _map.size_xz
-	_land_value.text = "%.0f %% de la carte" % (100.0 * float(land) / float(total))
+	_land_value.text = "%.0f %%" % (100.0 * float(land) / float(total))
+	# Part des terres ou l'on peut s'installer : c'est ce chiffre, et non la
+	# surface emergee, qui dit si un monde est habitable.
+	_flat_value.text = "%.0f %%" % (100.0 * float(flat) / float(maxi(land, 1)))
 
 	var ordered := counts.keys()
 	ordered.sort_custom(func(a, b): return counts[a] > counts[b])

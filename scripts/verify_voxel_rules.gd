@@ -204,6 +204,7 @@ func _report_climate(map: WorldMap) -> void:
 	var hot := 0
 	var dry := 0
 	var both := 0
+	var flat := 0
 
 	for z in map.size_xz:
 		for x in map.size_xz:
@@ -224,6 +225,8 @@ func _report_climate(map: WorldMap) -> void:
 				dry += 1
 			if is_hot and is_dry:
 				both += 1
+			if map.slope_at(x, z) <= WorldMap.FLAT_SLOPE:
+				flat += 1
 
 	if land == 0:
 		print("\n  (aucune terre emergee)")
@@ -236,6 +239,8 @@ func _report_climate(map: WorldMap) -> void:
 		hot, 100.0 * float(hot) / float(land),
 		dry, 100.0 * float(dry) / float(land),
 		both, 100.0 * float(both) / float(land)])
+	print("    terrain plat (pente <= %.2f) : %d (%.1f %%)" % [
+		WorldMap.FLAT_SLOPE, flat, 100.0 * float(flat) / float(land)])
 
 
 func _benchmark() -> void:

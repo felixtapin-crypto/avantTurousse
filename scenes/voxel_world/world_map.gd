@@ -62,7 +62,7 @@ extends RefCounted
 # qu'on ait a y penser. Mais l'introspection ne voit pas le corps des
 # fonctions : sans ce compteur, une refonte de l'erosion servirait d'anciennes
 # cartes en silence.
-const GENERATION_VERSION := 1
+const GENERATION_VERSION := 2
 
 # --- Geometrie de l'ile ----------------------------------------------------
 const SEA_LEVEL := 30
@@ -98,6 +98,26 @@ const COAST_CURVE := 1.9
 # fois plus grande supporte de toute facon un relief plus marque.
 const SURFACE_BASE := 45.0
 const SURFACE_AMPLITUDE := 14.0
+
+# Plaines : des zones ou le relief est volontairement ecrase.
+#
+# Un bruit fractal ne produit jamais de terrain PLAT — il produit du vallonne
+# a toutes les echelles, donc partout une pente. Pour qu'il existe des plaines
+# ou s'installer, il faut les creuser dans le modele : un second bruit basse
+# frequence designe les regions plates, et on y attenue le relief au lieu de
+# le laisser osciller.
+#
+# L'erosion fluviale ne les detruit pas ensuite : elle creuse
+# proportionnellement a la pente, donc elle ne mord presque pas sur du plat.
+const PLAIN_FREQUENCY := 0.0055
+const PLAIN_THRESHOLD := 0.12
+const PLAIN_BLEND := 0.34
+# Part du relief conservee au coeur d'une plaine. Zero donnerait une table de
+# billard, qu'aucun terrain naturel ne montre.
+const PLAIN_RELIEF := 0.16
+# Pente en-deca de laquelle on considere un terrain comme praticable et plat,
+# pour la mesure affichee a l'ecran de generation.
+const FLAT_SLOPE := 0.22
 const SEABED_BASE := 22.0
 const SEABED_AMPLITUDE := 2.5
 const SEABED_FALLOFF := 8.0
@@ -146,7 +166,7 @@ const TEMP_NOISE := 0.12
 const MOIST_BASE := 0.30
 const MOIST_COAST := 0.26         # l'air humide vient de la mer
 const MOIST_RIVER := 0.30         # une vallee a fort debit est humide
-const MOIST_SHADOW := 0.52        # assechement sous le vent
+const MOIST_SHADOW := 0.64        # assechement sous le vent
 const MOIST_NOISE := 0.16
 
 # Ombre pluviometrique : le vent dominant charge d'humidite au-dessus de la
@@ -162,7 +182,7 @@ const MOIST_NOISE := 0.16
 const WIND_DIR := Vector2(0.82, 0.57)
 const SHADOW_SAMPLES := 6
 const SHADOW_STEP := 9.0
-const SHADOW_SCALE := 11.0        # denivele au vent au-dela duquel l'ombre sature
+const SHADOW_SCALE := 8.0         # denivele au vent au-dela duquel l'ombre sature
 
 # --- Seuils de biome -------------------------------------------------------
 const DEEP_SEA_DEPTH := 6
@@ -180,8 +200,8 @@ const BEACH_MAX_SLOPE := 0.6      # au-dela, la cote est une falaise, pas une pl
 const SLOPE_ROCK := 1.5
 const SLOPE_SCREE := 0.9
 const TEMP_SNOW := 0.30           # en-dessous : neige
-const TEMP_DESERT := 0.56         # au-dessus, et sec : desert
-const MOIST_DESERT := 0.38
+const TEMP_DESERT := 0.50        # au-dessus, et sec : desert
+const MOIST_DESERT := 0.43
 const MOIST_FOREST := 0.58
 
 # --- Sous-sol --------------------------------------------------------------
@@ -438,6 +458,11 @@ func _build_base_relief(seed_value: int) -> void:
 	seabed_noise.seed = seed_value + 2
 	seabed_noise.frequency = 0.01
 
+	var plain_noise := FastNoiseLite.new()
+	plain_noise.seed = seed_value + 7
+	plain_noise.frequency = PLAIN_FREQUENCY
+	plain_noise.fractal_octaves = 2
+
 	var center := float(size_xz) / 2.0
 
 	for z in size_xz:
@@ -463,7 +488,12 @@ func _build_base_relief(seed_value: int) -> void:
 				+ seabed_noise.get_noise_2d(float(x), float(z)) * SEABED_AMPLITUDE \
 				- offshore * SEABED_FALLOFF
 
-			var land := SURFACE_BASE + height_noise.get_noise_2d(float(x), float(z)) * SURFACE_AMPLITUDE
+			# Relief des terres, attenue la ou la carte designe une plaine.
+			var flatness := smoothstep(
+				PLAIN_THRESHOLD, PLAIN_THRESHOLD + PLAIN_BLEND,
+				plain_noise.get_noise_2d(float(x), float(z)))
+			var relief := height_noise.get_noise_2d(float(x), float(z)) * SURFACE_AMPLITUDE
+			var land := SURFACE_BASE + lerpf(relief, relief * PLAIN_RELIEF, flatness)
 
 			var index := z * size_xz + x
 			_height_f[index] = lerpf(seabed, land, pow(landness, COAST_CURVE))
@@ -736,10 +766,15 @@ func _biome_for(height: int, slope: float, temp: float, moist: float, is_river: 
 		return Biome.ROCK
 	if temp < TEMP_SNOW:
 		return Biome.SNOW
-	if slope >= SLOPE_SCREE:
-		return Biome.SCREE
+	# Le desert passe AVANT l'eboulis : un versant chaud et sec reste un
+	# desert, pas un talus de pierraille. Dans l'ordre inverse, toute zone
+	# aride un tant soit peu pentue etait classee eboulis, ce qui rognait le
+	# desert sans rien dire — les seuils de climat avaient l'air en cause
+	# alors que c'etait l'ordre des tests.
 	if temp > TEMP_DESERT and moist < MOIST_DESERT:
 		return Biome.DESERT
+	if slope >= SLOPE_SCREE:
+		return Biome.SCREE
 	if moist > MOIST_FOREST:
 		return Biome.FOREST
 	return Biome.PLAINS
@@ -838,3 +873,12 @@ func restore_state(data: Dictionary) -> bool:
 
 	_prepare_cave_noise(seed_used)
 	return true
+
+
+# Pente du terrain a cette colonne, en voxels de denivele par voxel parcouru.
+# Publique parce que l'ecran de generation s'en sert pour montrer ou sont les
+# terrains plats — la ou on peut s'installer.
+func slope_at(x: int, z: int) -> float:
+	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
+		return 0.0
+	return _slope_f(z * size_xz + x)
