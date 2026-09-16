@@ -53,6 +53,13 @@ dressage").
 - Interaction avec le monde par un système de "regard + touche d'action" :
   viser un voxel/objet, une touche pour l'action contextuelle (creuser,
   couper, ramasser, poser, allumer...).
+- **Sélecteur d'outil actif** : parmi les outils déjà trouvés (houe, seau,
+  outil de récolte...), le joueur choisit celui qu'il a "en main" (barre
+  d'outils, touches numériques ou molette). L'action contextuelle dépend
+  alors de l'outil actif autant que de ce qu'on vise, plutôt que d'un ordre
+  de priorité fixe caché dans le code. Corrige un accroc identifié en jeu :
+  une fois la houe trouvée, viser le sol labourait systématiquement au lieu
+  de proposer aussi le creusage normal.
 - Remplace complètement le contrôleur FPS du prototype initial (voir section
   "Ce qui change par rapport au prototype existant" plus bas).
 
