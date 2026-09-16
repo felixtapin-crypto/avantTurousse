@@ -47,9 +47,11 @@ tâches plus petites au fur et à mesure :
   hauteur d'une colonne, pas de veritable volume
 - [ ] Jour/nuit et meteo : passer sur une horloge/etat faisant autorite
   cote hote (avec sync reseau) le jour ou ça doit influer sur des jauges
-  de survie partagees — pour l'instant chaque pair calcule independamment
-  (voir `day_night_cycle.gd` et `World.is_raining`), ce qui est correct
-  seulement tant que c'est purement cosmetique
+  de survie partagees, OU des qu'on affiche l'heure explicitement a
+  l'ecran (voir le gabarit "L'horloge" dans DESIGN.md) — pour l'instant
+  chaque pair calcule independamment (voir `day_night_cycle.gd` et
+  `World.is_raining`), ce qui est correct seulement tant que c'est
+  purement cosmetique/pas affiche comme une donnee fiable au joueur
 - [ ] Meteo : faire reagir les nuages (plus denses/sombres quand il pleut)
 - [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
 - [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler

@@ -195,6 +195,21 @@ paramétrable (position, objet requis, texte d'indice). À chaque partie :
   partie (ex. "les anciens nourrissaient leurs dragons de poisson et de
   baies, jamais de viande"). Peut apparaître à n'importe quel maillon de la
   chaîne, pas seulement à la fin.
+- **L'horloge (à trouver ou à fabriquer)** : tant qu'on ne l'a pas, les
+  joueurs n'ont aucune indication fiable de l'heure — seulement ce qu'ils
+  voient à l'œil (position du soleil, luminosité). La trouver (une montre
+  ou un cadran solaire caché, comme les autres artefacts) ou la fabriquer
+  (assembler un cadran solaire avec les bons matériaux, à un endroit
+  suffisamment dégagé pour voir le soleil) débloque un indicateur d'heure
+  à l'écran. Peut aussi conditionner une énigme qui a besoin d'un moment
+  précis (ex. "l'ombre ne pointe sur la porte qu'au midi solaire").
+  Implication technique : ça renforce l'idée que l'heure du jour doit
+  devenir une vraie donnée partagée (autorité côté hôte + synchro), pas
+  calculée en indépendant par chaque joueur comme c'est le cas maintenant
+  (voir `TASKS.md`) — sinon les deux joueurs pourraient voir une heure
+  légèrement différente une fois qu'elle est affichée explicitement à
+  l'écran, ce qui serait bien plus visible/gênant qu'un simple décalage
+  cosmétique sur la position du soleil.
 
 Chaque nouveau gabarit qu'on ajoute doit préciser : biomes valides, objet(s)
 requis pour le résoudre, et le format du texte d'indice qu'il génère pour la
