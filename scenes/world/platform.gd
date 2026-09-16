@@ -17,6 +17,10 @@ extends StaticBody3D
 const BOTTOM_Y := -15.0 # jusqu'ou descendent les parois de falaise sur le pourtour
 const MIN_EDITED_HEIGHT := 0.5  # on ne peut pas creuser jusqu'au vide sous la plateforme
 const MAX_EDITED_HEIGHT := 40.0 # limite haute pour eviter les tours infinies
+const STABLE_HEIGHT_DIFF := 1.0 # difference max stable entre deux colonnes voisines
+const MAX_SETTLE_RADIUS := 3    # portee max (en colonnes) d'un eboulement, pour rester local
+
+const _NEIGHBOR_OFFSETS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 # -1.0 dans ce tableau = pas de terrain a cette colonne (vide, on peut y tomber)
 var heights: PackedFloat32Array
@@ -67,6 +71,7 @@ func request_edit(cx: int, cz: int, delta: int) -> void:
 
 	var key := Vector2i(cx, cz)
 	column_edits[key] = int(column_edits.get(key, 0)) + delta
+	_settle(key)
 	_build_mesh()
 
 
@@ -76,6 +81,62 @@ func _effective_height(x: int, z: int) -> float:
 		return -1.0
 	var edit: int = column_edits.get(Vector2i(x, z), 0)
 	return clampf(base + float(edit), MIN_EDITED_HEIGHT, MAX_EDITED_HEIGHT)
+
+
+func _is_column_valid(x: int, z: int) -> bool:
+	if x < 0 or z < 0 or x >= size or z >= size:
+		return false
+	return heights[z * size + x] >= 0.0
+
+
+func _adjust_column(col: Vector2i, delta: int) -> void:
+	column_edits[col] = int(column_edits.get(col, 0)) + delta
+
+
+# Eboulement simplifie ("angle de repos") : la terre ne tient pas une marche
+# de plus de STABLE_HEIGHT_DIFF entre deux colonnes voisines. Des qu'un tas
+# (ou un trou) cree un ecart trop grand, on transfere 1m du haut vers le bas
+# et on recommence, en cascade, jusqu'a stabilisation - ca adoucit les marches
+# franches en pente au lieu de laisser des tours/puits aux bords a pic.
+#
+# La cascade est bornee a MAX_SETTLE_RADIUS colonnes de la modification
+# d'origine : sans ca, un terrain naturel dont la pente frole deja le seuil
+# quelque part laisse le materiau "couler" tres loin de son point de depart
+# (constate en test : jusqu'a 8 colonnes plus loin pour un seul empilement),
+# ce qui deborde largement la zone que le joueur vient de toucher.
+func _settle(start: Vector2i) -> void:
+	var queue: Array[Dictionary] = [{"col": start, "dist": 0}]
+	var guard := 0
+	while not queue.is_empty() and guard < 2000:
+		guard += 1
+		var entry: Dictionary = queue.pop_front()
+		var col: Vector2i = entry["col"]
+		var dist: int = entry["dist"]
+		if not _is_column_valid(col.x, col.y):
+			continue
+		var h := _effective_height(col.x, col.y)
+		for offset in _NEIGHBOR_OFFSETS:
+			var neighbor := col + offset
+			if not _is_column_valid(neighbor.x, neighbor.y):
+				continue
+			var neighbor_height := _effective_height(neighbor.x, neighbor.y)
+			# Les deux sens comptent : un tas trop haut glisse vers le bas,
+			# mais un trou trop profond (creuser plusieurs fois au meme
+			# endroit) doit aussi faire crouler la terre des voisins dedans.
+			if h - neighbor_height > STABLE_HEIGHT_DIFF:
+				_adjust_column(col, -1)
+				_adjust_column(neighbor, 1)
+				h -= 1
+				if dist < MAX_SETTLE_RADIUS:
+					queue.append({"col": col, "dist": dist})
+					queue.append({"col": neighbor, "dist": dist + 1})
+			elif neighbor_height - h > STABLE_HEIGHT_DIFF:
+				_adjust_column(col, 1)
+				_adjust_column(neighbor, -1)
+				h += 1
+				if dist < MAX_SETTLE_RADIUS:
+					queue.append({"col": col, "dist": dist})
+					queue.append({"col": neighbor, "dist": dist + 1})
 
 
 func _build_heightmap(seed_value: int) -> void:
