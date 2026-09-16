@@ -36,9 +36,6 @@ var _cache_label: Label
 
 
 func _ready() -> void:
-	# Revenir ici depuis une partie laisserait la carte preparee en memoire :
-	# on repart d'une page blanche, chaque monde portant deja ses reglages.
-	WorldSettings.prepared_map = null
 	_entries = MapCache.entries().filter(func(e): return bool(e["current"]))
 	_build_ui()
 	_select(0)
@@ -331,8 +328,16 @@ func _open() -> void:
 	_play_button.disabled = true
 	await get_tree().process_frame
 
-	WorldSettings.prepared_map = MapCache.load_or_generate(
-		int(entry["seed"]), int(entry["size"]), WorldSettings.height)
+	# La carte du dernier monde joue est GARDEE : revenir au menu puis y
+	# retourner ne doit pas repayer une seconde de lecture pour retomber sur
+	# l objet qu on tient deja.
+	var kept := WorldSettings.prepared_map
+	var matches := (kept != null
+		and kept.seed_used == int(entry["seed"])
+		and kept.size_xz == int(entry["size"]))
+	if not matches:
+		WorldSettings.prepared_map = MapCache.load_or_generate(
+			int(entry["seed"]), int(entry["size"]), WorldSettings.height)
 	get_tree().change_scene_to_file(WORLD_SCENE)
 
 

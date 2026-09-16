@@ -53,7 +53,7 @@ var _sea: Sea
 
 
 func _ready() -> void:
-	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris · M nouvelle carte · F10 quitter"
+	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris · M menu des mondes · F10 quitter"
 	status_label.text = "Calcul de la carte..."
 	_build_exit_bar()
 	_build_water_veil()
@@ -211,8 +211,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	match (event as InputEventKey).keycode:
 		KEY_M:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-			await _announce_exit("Retour a la carte...")
-			get_tree().change_scene_to_file("res://scenes/voxel_world/map_preview.tscn")
+			await _announce_exit("Retour au menu...")
+			get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn")
 		KEY_F10:
 			await _announce_exit("Fermeture...")
 			get_tree().quit()
