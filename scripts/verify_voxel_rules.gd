@@ -45,6 +45,7 @@ func _initialize() -> void:
 	failures += _check_surface(map)
 	failures += _check_biomes(map)
 	failures += _check_cache()
+	failures += _check_mesh_carries_materials(map)
 
 	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
 	# et manquer sur une autre, et ce n'est pas acceptable — une partie tiree
@@ -352,3 +353,58 @@ func _check_cache() -> int:
 		printerr("  le terrain 3D differe : le bruit des grottes n'a pas ete rededuit")
 		failures += 1
 	return failures
+
+
+# Le maillage doit reellement transporter la matiere jusqu'au shader.
+#
+# `VoxelMesherTransvoxel.texturing_mode` vaut TEXTURES_NONE par defaut, et
+# dans ce cas le mailleur n'ecrit AUCUNE donnee de matiere : l'attribut
+# CUSTOM1 reste vide, le shader lit des indices nuls et peint tout le monde
+# avec la couche 0. Rien n'est signale — le terrain sort simplement tout en
+# herbe, et le choix du pack de textures parait ignore.
+#
+# C'est la panne exacte rencontree en jeu, et elle est invisible a la lecture
+# du code : le generateur remplit correctement ses canaux, le materiau recoit
+# bien son tableau, et pourtant rien n'arrive. D'ou ce controle.
+func _check_mesh_carries_materials(map: WorldMap) -> int:
+	print("\n--- transport des matieres jusqu'au maillage ---")
+
+	var generator := TerrainGenerator.new()
+	generator.map = map
+
+	# Un chunk a cheval sur la surface, donc garanti de contenir un maillage.
+	var centre := map.size_xz / 2
+	@warning_ignore("integer_division")
+	var cy := map.terrain_height(centre, centre) / CHUNK
+	var buffer := VoxelBuffer.new()
+	buffer.create(CHUNK, CHUNK, CHUNK)
+	generator._generate_block(buffer, Vector3i(centre, cy * CHUNK, centre), 0)
+
+	var mesher := VoxelMesherTransvoxel.new()
+	mesher.texturing_mode = VoxelMesherTransvoxel.TEXTURES_MIXEL4_S4
+	mesher.textures_ignore_air_voxels = true
+
+	var mesh: ArrayMesh = mesher.build_mesh(buffer, [], {})
+	if mesh == null or mesh.get_surface_count() == 0:
+		printerr("  le mailleur ne produit aucune surface sur un chunk de surface")
+		return 1
+
+	var arrays := mesh.surface_get_arrays(0)
+	var custom1 = arrays[Mesh.ARRAY_CUSTOM1]
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	print("  sommets : %d" % vertices.size())
+
+	if custom1 == null or (custom1 is PackedFloat32Array and custom1.is_empty()):
+		printerr("  CUSTOM1 absent : le shader peindra tout avec la couche 0")
+		return 1
+
+	var non_zero := 0
+	for value in custom1:
+		if value != 0.0:
+			non_zero += 1
+	print("  CUSTOM1 : %d valeurs, dont %d non nulles" % [custom1.size(), non_zero])
+
+	if non_zero == 0:
+		printerr("  CUSTOM1 entierement nul : aucune matiere ne parvient au shader")
+		return 1
+	return 0

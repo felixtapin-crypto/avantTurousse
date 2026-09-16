@@ -52,7 +52,7 @@ func _ready() -> void:
 	terrain = VoxelTerrain.new()
 	terrain.name = "VoxelTerrain"
 	terrain.generator = generator
-	terrain.mesher = VoxelMesherTransvoxel.new()
+	terrain.mesher = _build_mesher()
 	terrain.generate_collisions = true
 	terrain.max_view_distance = view_distance
 	terrain.bounds = AABB(
@@ -104,6 +104,27 @@ func _add_sea() -> void:
 
 	plane.position = Vector3(float(map_size) / 2.0, float(WorldMap.SEA_LEVEL), float(map_size) / 2.0)
 	add_child(plane)
+
+
+# Le mailleur doit etre explicitement autorise a transporter la matiere.
+#
+# `texturing_mode` vaut TEXTURES_NONE par defaut : le mailleur n'ecrit alors
+# AUCUNE donnee de matiere dans le maillage, l'attribut CUSTOM1 reste a zero,
+# et le shader echantillonne la couche 0 pour tout le monde. Le terrain sort
+# donc entierement en herbe, sans la moindre erreur, et le choix du pack de
+# textures semble ignore alors que c'est tout le tableau qui n'arrive jamais.
+#
+# MIXEL4_S4 est le format qu'ecrit `TerrainGenerator` : quatre indices et
+# quatre poids sur 4 bits chacun, encodes par `vec4i_to_u16_indices` et
+# `color_to_u16_weights`.
+func _build_mesher() -> VoxelMesherTransvoxel:
+	var mesher := VoxelMesherTransvoxel.new()
+	mesher.texturing_mode = VoxelMesherTransvoxel.TEXTURES_MIXEL4_S4
+	# Les voxels d'air portent eux aussi un indice de matiere, faute de quoi
+	# le generateur devrait traiter le vide a part ; les ignorer ici evite
+	# qu'ils ne diluent le melange sur les sommets de surface.
+	mesher.textures_ignore_air_voxels = true
+	return mesher
 
 
 func _terrain_material() -> ShaderMaterial:
