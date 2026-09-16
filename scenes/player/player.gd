@@ -27,6 +27,12 @@ const HARVEST_TOOL_COLOR := Color(0.35, 0.65, 0.25, 1.0)
 const HOE_COLOR := Color(0.55, 0.38, 0.2, 1.0)
 const BUCKET_EMPTY_COLOR := Color(0.5, 0.4, 0.25, 1.0)
 const BUCKET_FULL_COLOR := Color(0.25, 0.55, 0.75, 1.0)
+const HANDS_COLOR := Color(0.6, 0.6, 0.65, 1.0)
+const ACTIVE_SLOT_SCALE := Vector2(1.15, 1.15)
+
+# Outils selectionnables (l'horloge et le seau restent "toujours actifs" en
+# parallele - voir DESIGN.md, "Sélecteur d'outil actif" - donc absents d'ici).
+const TOOL_SLOTS := ["hands", "harvest", "hoe"]
 
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
@@ -45,6 +51,7 @@ const BUCKET_FULL_COLOR := Color(0.25, 0.55, 0.75, 1.0)
 @onready var harvest_slot: ColorRect = $Hud/ToolsRow/HarvestSlot
 @onready var hoe_slot: ColorRect = $Hud/ToolsRow/HoeSlot
 @onready var bucket_slot: ColorRect = $Hud/ToolsRow/BucketSlot
+@onready var hands_slot: ColorRect = $Hud/ToolsRow/HandsSlot
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -79,6 +86,12 @@ var has_harvest_tool := false
 var has_hoe := false
 var has_bucket := false
 var bucket_full := false
+
+# Outil actuellement "en main" parmi TOOL_SLOTS (touches 1/2/3 ou molette,
+# voir _unhandled_input) - determine ce que fait le clic gauche sur du
+# terrain/une plante plutot qu'un ordre de priorite fixe. Voir DESIGN.md,
+# "Sélecteur d'outil actif".
+var active_tool := "hands"
 
 # Graines/boutures : recuperees en recoltant une plante sauvage (une partie
 # du temps) ou une parcelle cultivee arrivee a maturite ; consommees pour
@@ -146,6 +159,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_dig()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			_build()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_cycle_tool(-1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_cycle_tool(1)
+
+	if event is InputEventKey and event.pressed:
+		match event.physical_keycode:
+			KEY_1:
+				_select_tool("hands")
+			KEY_2:
+				_select_tool("harvest")
+			KEY_3:
+				_select_tool("hoe")
 
 
 func _physics_process(delta: float) -> void:
@@ -220,8 +246,8 @@ func _dig() -> void:
 		return
 
 	if collider is FoodPlant:
-		if not has_harvest_tool:
-			_show_message("Il faut un outil de récolte.")
+		if active_tool != "harvest":
+			_show_message("Équipez l'outil de récolte (2).")
 			return
 		collider.harvest.rpc()
 		hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
@@ -233,7 +259,7 @@ func _dig() -> void:
 		_interact_farm_plot(collider)
 		return
 
-	if has_hoe:
+	if active_tool == "hoe":
 		var till_column := _hit_to_column(hit)
 		world.till_soil.rpc(till_column.x, till_column.y)
 		return
@@ -265,8 +291,8 @@ func _interact_farm_plot(plot: FarmPlot) -> void:
 		FarmPlot.State.GROWING:
 			_show_message("Ça pousse encore...")
 		FarmPlot.State.READY:
-			if not has_harvest_tool:
-				_show_message("Il faut un outil de récolte.")
+			if active_tool != "harvest":
+				_show_message("Équipez l'outil de récolte (2).")
 				return
 			plot.harvest.rpc()
 			hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
@@ -339,15 +365,57 @@ func _update_hud() -> void:
 
 # Rangee de cases en bas du HUD, une par outil : grisee tant que non
 # trouve, coloree une fois en poche. Le seau distingue en plus rempli
-# (bleu) / vide (couleur bois) une fois trouve.
+# (bleu) / vide (couleur bois) une fois trouve. La case de l'outil
+# actuellement selectionne (voir TOOL_SLOTS) est agrandie.
 func _update_tool_indicators() -> void:
 	clock_slot.color = CLOCK_COLOR if has_clock else TOOL_LOCKED_COLOR
 	harvest_slot.color = HARVEST_TOOL_COLOR if has_harvest_tool else TOOL_LOCKED_COLOR
 	hoe_slot.color = HOE_COLOR if has_hoe else TOOL_LOCKED_COLOR
+	hands_slot.color = HANDS_COLOR
 	if not has_bucket:
 		bucket_slot.color = TOOL_LOCKED_COLOR
 	else:
 		bucket_slot.color = BUCKET_FULL_COLOR if bucket_full else BUCKET_EMPTY_COLOR
+
+	hands_slot.scale = ACTIVE_SLOT_SCALE if active_tool == "hands" else Vector2.ONE
+	harvest_slot.scale = ACTIVE_SLOT_SCALE if active_tool == "harvest" else Vector2.ONE
+	hoe_slot.scale = ACTIVE_SLOT_SCALE if active_tool == "hoe" else Vector2.ONE
+
+
+func _owns_tool(tool_name: String) -> bool:
+	match tool_name:
+		"hands":
+			return true
+		"harvest":
+			return has_harvest_tool
+		"hoe":
+			return has_hoe
+		_:
+			return false
+
+
+func _select_tool(tool_name: String) -> void:
+	if not _owns_tool(tool_name):
+		return
+	active_tool = tool_name
+	_update_tool_indicators()
+
+
+func _cycle_tool(direction: int) -> void:
+	var owned: Array[String] = []
+	for tool_name in TOOL_SLOTS:
+		if _owns_tool(tool_name):
+			owned.append(tool_name)
+	if owned.is_empty():
+		return
+
+	var idx := owned.find(active_tool)
+	if idx == -1:
+		idx = 0
+	else:
+		idx = wrapi(idx + direction, 0, owned.size())
+	active_tool = owned[idx]
+	_update_tool_indicators()
 
 
 func _format_time(time_of_day: float) -> String:
