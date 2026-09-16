@@ -4,20 +4,21 @@ const SPEED := 5.0
 const JUMP_VELOCITY := 4.5
 const MOUSE_SENSITIVITY := 0.003
 
-const FIRST_PERSON_CAMERA_POS := Vector3(0, 1.6, 0)
+const THIRD_PERSON_CAMERA_POS := Vector3(0, 1.2, 4.0)
 const ARRIVAL_HEIGHT := 45.0
 const ARRIVAL_APPROACH := Vector3(-20.0, 0.0, -20.0)
 const ARRIVAL_DURATION := 3.2
 
-@onready var camera: Camera3D = $Camera3D
+@onready var camera_pivot: Node3D = $CameraPivot
+@onready var camera: Camera3D = $CameraPivot/Camera3D
 @onready var mesh: MeshInstance3D = $MeshInstance3D
 @onready var sync: MultiplayerSynchronizer = $MultiplayerSynchronizer
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
-# Tant que false, ni les deplacements ni la camera FPS ne sont actifs : le
-# joueur regarde son personnage s'ecraser en engin volant avant de reprendre
-# la main. Voir _play_arrival_sequence().
+# Tant que false, ni les deplacements ni le controle de la camera ne sont
+# actifs : le joueur regarde son personnage s'ecraser en engin volant avant
+# de reprendre la main. Voir _play_arrival_sequence().
 var arrived := false
 
 var _arrival_start: Vector3
@@ -54,8 +55,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * MOUSE_SENSITIVITY)
-		camera.rotate_x(-event.relative.y * MOUSE_SENSITIVITY)
-		camera.rotation.x = clampf(camera.rotation.x, -1.3, 1.3)
+		camera_pivot.rotate_x(-event.relative.y * MOUSE_SENSITIVITY)
+		camera_pivot.rotation.x = clampf(camera_pivot.rotation.x, -1.3, 1.3)
 
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -116,7 +117,7 @@ func _play_arrival_sequence() -> void:
 	_glider.queue_free()
 	_glider = null
 	mesh.visible = true
-	camera.position = FIRST_PERSON_CAMERA_POS
+	camera.position = THIRD_PERSON_CAMERA_POS
 	camera.rotation = Vector3.ZERO
 
 	arrived = true

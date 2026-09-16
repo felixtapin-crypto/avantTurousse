@@ -21,8 +21,11 @@ mesh = SubResource("CapsuleMesh_1")
 position = Vector3(0, 0.8, 0)
 shape = SubResource("CapsuleShape3D_1")
 
-[node name="Camera3D" type="Camera3D" parent="."]
+[node name="CameraPivot" type="Node3D" parent="."]
 position = Vector3(0, 1.6, 0)
+
+[node name="Camera3D" type="Camera3D" parent="CameraPivot"]
+position = Vector3(0, 1.2, 4.0)
 current = false
 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
