@@ -16,6 +16,8 @@ script = ExtResource("PlatformScript")
 
 [node name="Players" type="Node3D" parent="."]
 
+[node name="Wrecks" type="Node3D" parent="."]
+
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
 
 [node name="GameOverLayer" type="CanvasLayer" parent="."]

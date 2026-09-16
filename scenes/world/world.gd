@@ -11,6 +11,7 @@ const FALL_LIMIT_Y := -30.0
 
 @onready var platform: Platform = $Platform
 @onready var players_root: Node3D = $Players
+@onready var wrecks_root: Node3D = $Wrecks
 @onready var spawner: MultiplayerSpawner = $MultiplayerSpawner
 @onready var game_over_panel: Control = $GameOverLayer/GameOverPanel
 
@@ -44,6 +45,8 @@ func _spawn_player(id: int) -> Node:
 	player.name = str(id)
 	var offset := Vector2(players_root.get_child_count() * 2.5, 0.0)
 	player.position = platform.get_spawn_position(offset)
+	player.world_platform = platform
+	player.world = self
 	return player
 
 
@@ -66,3 +69,16 @@ func _trigger_game_over() -> void:
 func _on_quit_pressed() -> void:
 	Network.leave_game()
 	get_tree().change_scene_to_file("res://scenes/main_menu/main_menu.tscn")
+
+
+# Garde une trace visuelle de l'atterrissage de chaque joueur : l'engin volant
+# reste sur la plateforme, ecrase, plutot que de disparaitre. any_peer +
+# call_local : chaque pair (y compris celui qui atterrit) construit sa propre
+# copie identique de l'epave a partir des memes parametres plutot que de
+# tenter de repliquer un noeud deja existant sur le reseau.
+@rpc("any_peer", "call_local", "reliable")
+func spawn_wreck(wreck_position: Vector3, facing_y: float) -> void:
+	var wreck := GliderBuilder.build()
+	wrecks_root.add_child(wreck)
+	wreck.global_position = wreck_position
+	wreck.rotation = Vector3(deg_to_rad(12), facing_y, deg_to_rad(18))

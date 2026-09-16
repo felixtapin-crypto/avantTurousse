@@ -3,6 +3,7 @@ extends CharacterBody3D
 const SPEED := 5.0
 const JUMP_VELOCITY := 4.5
 const MOUSE_SENSITIVITY := 0.003
+const INTERACTION_RANGE := 6.0
 
 const THIRD_PERSON_CAMERA_POS := Vector3(0, 1.2, 4.0)
 const ARRIVAL_HEIGHT := 45.0
@@ -13,13 +14,24 @@ const ARRIVAL_DURATION := 3.2
 @onready var camera: Camera3D = $CameraPivot/Camera3D
 @onready var mesh: MeshInstance3D = $MeshInstance3D
 @onready var sync: MultiplayerSynchronizer = $MultiplayerSynchronizer
+@onready var hud: CanvasLayer = $Hud
+@onready var block_label: Label = $Hud/BlockLabel
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+
+# Injectes par World._spawn_player() a la creation de ce joueur.
+var world_platform: Platform
+var world # reference generique vers le noeud World (pas de class_name dessus)
 
 # Tant que false, ni les deplacements ni le controle de la camera ne sont
 # actifs : le joueur regarde son personnage s'ecraser en engin volant avant
 # de reprendre la main. Voir _play_arrival_sequence().
 var arrived := false
+
+# Inventaire minimal : un seul type de "bloc" pour l'instant. Creuser en
+# donne, construire en consomme. Voir Platform.request_edit pour la logique
+# de sculpte du terrain elle-meme.
+var block_count := 5
 
 var _arrival_start: Vector3
 var _arrival_target: Vector3
@@ -39,6 +51,8 @@ func _ready() -> void:
 	sync.replication_config = config
 
 	camera.current = is_multiplayer_authority()
+	hud.visible = is_multiplayer_authority()
+	_update_hud()
 
 	if is_multiplayer_authority():
 		_play_arrival_sequence()
@@ -61,8 +75,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
-	if event is InputEventMouseButton and event.pressed and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if event is InputEventMouseButton and event.pressed:
+		if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			_dig()
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			_build()
 
 
 func _physics_process(delta: float) -> void:
@@ -86,6 +105,48 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 
 
+# Creuse la colonne visee (baisse sa hauteur de 1m) et recupere un bloc.
+func _dig() -> void:
+	var hit := _raycast()
+	if hit.is_empty():
+		return
+	var column := _hit_to_column(hit)
+	world_platform.request_edit.rpc(column.x, column.y, -1)
+	block_count += 1
+	_update_hud()
+
+
+# Construit sur la colonne visee (monte sa hauteur de 1m), si on a un bloc.
+func _build() -> void:
+	if block_count <= 0:
+		return
+	var hit := _raycast()
+	if hit.is_empty():
+		return
+	var column := _hit_to_column(hit)
+	world_platform.request_edit.rpc(column.x, column.y, 1)
+	block_count -= 1
+	_update_hud()
+
+
+func _raycast() -> Dictionary:
+	var space_state := get_world_3d().direct_space_state
+	var from := camera.global_position
+	var to := from - camera.global_transform.basis.z * INTERACTION_RANGE
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self]
+	return space_state.intersect_ray(query)
+
+
+func _hit_to_column(hit: Dictionary) -> Vector2i:
+	var pos: Vector3 = hit["position"]
+	return Vector2i(int(round(pos.x)), int(round(pos.z)))
+
+
+func _update_hud() -> void:
+	block_label.text = "Blocs : %d" % block_count
+
+
 # Fait apparaitre le joueur tres haut au-dessus de son point d'atterrissage a
 # bord d'un engin volant (placeholder steampunk : nacelle + aile + helice en
 # primitives, en attendant un vrai modele), puis l'amene au sol par un tween
@@ -97,7 +158,7 @@ func _play_arrival_sequence() -> void:
 	var landing_position := position
 
 	mesh.visible = false
-	_glider = _build_glider()
+	_glider = GliderBuilder.build()
 	add_child(_glider)
 
 	_arrival_start = landing_position + ARRIVAL_APPROACH + Vector3(0, ARRIVAL_HEIGHT, 0)
@@ -120,6 +181,11 @@ func _play_arrival_sequence() -> void:
 	camera.position = THIRD_PERSON_CAMERA_POS
 	camera.rotation = Vector3.ZERO
 
+	# Garde une trace de l'atterrissage : une epave identique est construite
+	# chez chaque joueur connecte (voir World.spawn_wreck), plutot que de
+	# faire disparaitre l'engin qui nous a amenes ici.
+	world.spawn_wreck.rpc(landing_position, rotation.y)
+
 	arrived = true
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -138,49 +204,3 @@ func _shake_camera() -> Tween:
 	tween.tween_property(camera, "h_offset", 0.0, 0.05)
 	tween.parallel().tween_property(camera, "v_offset", 0.0, 0.05)
 	return tween
-
-
-func _build_glider() -> Node3D:
-	var rig := Node3D.new()
-
-	var wood_material := StandardMaterial3D.new()
-	wood_material.albedo_color = Color(0.4, 0.26, 0.14)
-
-	var brass_material := StandardMaterial3D.new()
-	brass_material.albedo_color = Color(0.72, 0.53, 0.18)
-	brass_material.metallic = 0.6
-	brass_material.roughness = 0.35
-
-	var gondola := MeshInstance3D.new()
-	var gondola_mesh := BoxMesh.new()
-	gondola_mesh.size = Vector3(1.0, 0.8, 1.6)
-	gondola.mesh = gondola_mesh
-	gondola.material_override = wood_material
-	gondola.position = Vector3(0, -0.6, 0)
-	rig.add_child(gondola)
-
-	var wing := MeshInstance3D.new()
-	var wing_mesh := BoxMesh.new()
-	wing_mesh.size = Vector3(3.6, 0.1, 1.0)
-	wing.mesh = wing_mesh
-	wing.material_override = brass_material
-	wing.position = Vector3(0, 0.1, 0)
-	rig.add_child(wing)
-
-	var tail := MeshInstance3D.new()
-	var tail_mesh := BoxMesh.new()
-	tail_mesh.size = Vector3(0.15, 0.6, 0.15)
-	tail.mesh = tail_mesh
-	tail.material_override = brass_material
-	tail.position = Vector3(0, 0.1, 1.1)
-	rig.add_child(tail)
-
-	var propeller := MeshInstance3D.new()
-	var propeller_mesh := BoxMesh.new()
-	propeller_mesh.size = Vector3(0.08, 1.3, 0.12)
-	propeller.mesh = propeller_mesh
-	propeller.material_override = brass_material
-	propeller.position = Vector3(0, 0.1, -1.0)
-	rig.add_child(propeller)
-
-	return rig

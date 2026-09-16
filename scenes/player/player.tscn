@@ -29,3 +29,12 @@ position = Vector3(0, 1.2, 4.0)
 current = false
 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
+
+[node name="Hud" type="CanvasLayer" parent="."]
+
+[node name="BlockLabel" type="Label" parent="Hud"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 200.0
+offset_bottom = 40.0
+text = "Blocs : 0"
