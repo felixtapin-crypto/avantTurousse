@@ -106,3 +106,10 @@ tâches plus petites au fur et à mesure :
   call_local). L'engin volant de la cinematique d'arrivee reste
   desormais sur la plateforme comme epave apres l'atterrissage
   (`World.spawn_wreck`, aussi en RPC), au lieu de disparaitre.
+- 2026-09-16 — Viseur au centre de l'ecran (blanc -> jaune des qu'une
+  cible valide est a portee), pour qu'un clic dans le vide ne se confonde
+  plus avec un bug. Portee d'interaction 6m -> 8m.
+- 2026-09-16 — Effondrement simplifie de la terre (`Platform._settle`) :
+  creuser/construire ne laisse plus de tour/puits a pic, l'exces glisse
+  vers les colonnes voisines (bidirectionnel, porte a quelques colonnes
+  autour du point touche).
