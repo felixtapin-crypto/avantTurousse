@@ -22,12 +22,33 @@ l'autre a retravaillé le même système en parallèle.
    quelque chose qui touche l'architecture commune (format de sauvegarde,
    structure des voxels, code réseau), préviens-le (message, appel, peu
    importe) avant de coder, pas après.
-3. Quand c'est fini (ou abandonné), ferme l'issue (ou repasse-la en "Todo"
-   si abandonné), idéalement en la liant à la commit/PR correspondante.
-4. Committe et pull souvent (idéalement à chaque session), surtout pour
+3. Committe et pull souvent (idéalement à chaque session), surtout pour
    `DESIGN.md` — c'est le fichier qu'on modifie tous les deux, donc les
    divergences dessus doivent être résolues vite avant de diverger sur le
    code.
+
+## Workflow git : branches + Pull Request
+
+`master` est maintenant protégée sur GitHub : impossible d'y pousser
+directement, il faut passer par une Pull Request avec **au moins une
+approbation** (donc que l'autre l'ait relue et validée) avant de pouvoir
+merger. Concrètement :
+
+1. Crée une branche pour la tâche (`git checkout -b <nom>` depuis
+   `master` à jour). Nom libre mais parlant, par ex. `voxel-interaction`
+   ou `issue-12-gabarits-enigmes`.
+2. Committe sur cette branche, pousse-la (`git push -u origin <nom>`).
+3. Ouvre une Pull Request vers `master` (`gh pr create` ou sur github.com)
+   dès que c'est prêt à être relu — pas besoin d'attendre que tout soit
+   parfait, une PR peut évoluer avec de nouveaux commits.
+4. **Le merge n'a lieu que quand on est d'accord tous les deux** sur le
+   dev (d'où l'approbation obligatoire). Pas de merge solo d'un
+   changement que l'autre n'a pas vu.
+5. Une fois mergée, supprime la branche (github.com le propose
+   automatiquement après un merge de PR).
+
+Si jamais la protection bloque un cas légitime (urgence, PR trop lourde à
+splitter, etc.), elle reste ajustable — Settings > Branches sur le repo.
 
 Fichiers particulièrement sensibles aux conflits (à ne pas éditer à deux en
 même temps sans se prévenir) : les scènes `.tscn` (fusion textuelle mais
