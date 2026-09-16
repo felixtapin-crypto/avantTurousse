@@ -451,6 +451,13 @@ func _open_entrances(map, rng: RandomNumberGenerator,
 			var ground: int = map.terrain_height(x, z)
 			if ground <= _sea_level + ENTRANCE_MIN_ALTITUDE:
 				continue
+			# Jamais dans un lit de riviere. Le reseau est construit APRES le
+			# creusement des chenaux, donc rien n'empeche autrement une entree
+			# de s'ouvrir au fond de l'un d'eux — et le jour ou le lit portera
+			# de l'eau, elle noierait la galerie. C'est la meme regle que
+			# l'altitude minimale juste au-dessus, pour la meme raison.
+			if map.is_river(x, z):
+				continue
 			var slope := maxf(
 				absf(float(map.terrain_height(x + 2, z) - map.terrain_height(x - 2, z))),
 				absf(float(map.terrain_height(x, z + 2) - map.terrain_height(x, z - 2))))

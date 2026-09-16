@@ -47,6 +47,7 @@ func _initialize() -> void:
 	failures += _check_cache()
 	failures += _check_mesh_carries_materials(map)
 	failures += _check_surface_materials(map)
+	failures += _check_rivers(map)
 	failures += _check_caves(map)
 
 	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
@@ -130,6 +131,21 @@ func _check_surface(map: WorldMap) -> int:
 
 					if surface < 0:
 						missing += 1
+						continue
+
+					# Une ENTREE de grotte est un trou VOULU dans le sol, donc
+					# le premier vide rencontre en descendant du ciel n'y est
+					# pas la surface. La compter faisait sortir des ecarts de
+					# treize voxels et laissait croire a une derive du
+					# generateur, alors que c'est exactement ce que
+					# `_check_caves` verifie par ailleurs — qu'une entree ouvre
+					# bien un vide.
+					#
+					# Le commentaire en tete de cette fonction affirmait le
+					# controle « insensible aux grottes, situees plus bas ». Il
+					# l'est partout sauf ici, ou une grotte est par definition
+					# en haut.
+					if _near_entrance(map, wx, wz):
 						continue
 
 					var drift := absf(float(surface) - float(map.terrain_height(wx, wz)))
@@ -322,6 +338,19 @@ func _check_cache() -> int:
 					or not is_equal_approx(first.continentality_at(x, z), second.continentality_at(x, z)):
 				mismatches += 1
 
+	# Le trace des rivieres doit survivre au cache, et il est le seul champ qui
+	# ne puisse PAS se re-deriver : les hauteurs relues sont deja creusees, donc
+	# retracer dessus suivrait le chenal au lieu de le reproduire. S'il se
+	# perdait, rien ne le dirait — le monde relu serait identique, et seule la
+	# passe qui posera la surface d'eau tomberait sur un reseau vide.
+	var river_loss := 0
+	if first.rivers.path_count() != second.rivers.path_count() \
+			or first.rivers.point_count() != second.rivers.point_count():
+		printerr("  le trace des rivieres ne survit pas au cache (%d/%d chemins, %d/%d points)"
+			% [first.rivers.path_count(), second.rivers.path_count(),
+				first.rivers.point_count(), second.rivers.point_count()])
+		river_loss = 1
+
 	var cave_mismatches := 0
 	var generators := [TerrainGenerator.new(), TerrainGenerator.new()]
 	generators[0].map = first
@@ -354,7 +383,7 @@ func _check_cache() -> int:
 	if cave_mismatches > 0:
 		printerr("  le terrain 3D differe : le bruit des grottes n'a pas ete rededuit")
 		failures += 1
-	return failures
+	return failures + river_loss
 
 
 # Le maillage doit reellement transporter la matiere jusqu'au shader.
@@ -568,6 +597,276 @@ func _dominant_layer(packed_indices: float, packed_weights: float) -> int:
 			best_weight = weights[slot]
 			best = indices[slot]
 	return best
+
+
+# Marge autour d'une bouche d'entree, en colonnes. Un peu plus large que
+# ENTRANCE_RADIUS : la galerie s'evase en debouchant.
+const ENTRANCE_MARGIN := 7
+
+
+func _near_entrance(map: WorldMap, x: int, z: int) -> bool:
+	for mouth in map.cave_entrances():
+		if absi(mouth.x - x) <= ENTRANCE_MARGIN and absi(mouth.z - z) <= ENTRANCE_MARGIN:
+			return true
+	return false
+
+
+# Le reseau de rivieres doit etre un CHENAL, pas une etiquette.
+#
+# C'est exactement ce qu'il n'etait pas jusqu'ici : une colonne au-dessus d'un
+# quantile de debit, baissee d'un voxel et peinte en gravier. Rien ne le
+# signalait, parce que tout ce qui se verifiait — le biome existe, il a une
+# matiere — etait vrai. Ce qui manquait ne se voyait qu'a l'oeil, en jeu.
+#
+# Les quatre controles ci-dessous sont donc ceux qui auraient attrape ce cas :
+# le lit a-t-il une largeur, une profondeur, une issue, et la matiere du fond
+# survit-elle au fondu de dix metres du generateur.
+func _check_rivers(map: WorldMap) -> int:
+	print("\n--- reseau de rivieres ---")
+	var network := map.rivers
+	var points := network.point_count()
+	if network.path_count() == 0 or points == 0:
+		printerr("  aucun chenal trace : l'ile n'a pas de riviere")
+		return 1
+
+	var beds := 0
+	var land := 0
+	for z in map.size_xz:
+		for x in map.size_xz:
+			if map.terrain_height(x, z) <= WorldMap.SEA_LEVEL:
+				continue
+			land += 1
+			if map.biome_at(x, z) == WorldMap.Biome.RIVER:
+				beds += 1
+	print("  %d chemins, %d points, %d colonnes de lit (%.2f %% des terres)"
+		% [network.path_count(), points, beds,
+			100.0 * float(beds) / float(maxi(land, 1))])
+
+	var failures := 0
+
+	# 1. LARGEUR. C'est la demande meme : entre un et quatre metres.
+	# 2. ISSUE. Un chemin se termine a la mer ou sur un autre chemin ; s'il
+	#    s'arrete au milieu d'un pre, le percement des cuvettes a lache.
+	# 3. PROFONDEUR. Mesuree sur la carte FINALE, en comparant le fond au
+	#    terrain juste au-dela de la berge — donc sur le resultat du
+	#    creusement, pas sur l'intention du trace.
+	var occupied := {}
+	for index in network.path_count():
+		var path := network.path(index)
+		@warning_ignore("integer_division")
+		var count: int = path.size() / 4
+		for k in count:
+			var cell := int(path[k * 4 + 1]) * map.size_xz + int(path[k * 4])
+			occupied[cell] = occupied.get(cell, 0) + 1
+
+	var width_errors := 0
+	var stranded := 0
+	var depth_total := 0.0
+	var depth_samples := 0
+	var shallow := 0
+	var above_ground := 0
+
+	for index in network.path_count():
+		var path := network.path(index)
+		@warning_ignore("integer_division")
+		var count: int = path.size() / 4
+		for k in count:
+			var x := int(path[k * 4])
+			var z := int(path[k * 4 + 1])
+			var bed := path[k * 4 + 2]
+			var half_width := path[k * 4 + 3]
+
+			var width := half_width * 2.0
+			if width < RiverNetwork.WIDTH_MIN - 0.01 \
+					or width > RiverNetwork.WIDTH_MAX + 0.01:
+				width_errors += 1
+
+			# Le fond doit reellement etre descendu a l'altitude visee : si la
+			# carte est plus haute que le trace, le tampon n'a pas pris.
+			if map.terrain_height_f(x, z) > bed + 0.01:
+				above_ground += 1
+
+			# Profondeur reelle : le point haut des berges, juste au-dela de la
+			# portee du tampon, moins le fond.
+			var reach := ceili(half_width + RiverNetwork.BANK) + 1
+			var rim := -INF
+			for d in [Vector2i(reach, 0), Vector2i(-reach, 0),
+					Vector2i(0, reach), Vector2i(0, -reach)]:
+				var h := map.terrain_height_f(x + d.x, z + d.y)
+				if h > rim:
+					rim = h
+			if rim > -INF:
+				var drop := rim - map.terrain_height_f(x, z)
+				depth_total += drop
+				depth_samples += 1
+				if drop < 0.4:
+					shallow += 1
+
+		if count == 0:
+			continue
+		var last_z := int(path[(count - 1) * 4 + 1])
+		var last_x := int(path[(count - 1) * 4])
+		var last_cell := last_z * map.size_xz + last_x
+		var at_sea := map.terrain_height(last_x, last_z) <= WorldMap.SEA_LEVEL
+		# Une confluence se reconnait a un point partage par deux chemins : le
+		# tributaire pose son dernier point sur le tronc.
+		var joins: int = occupied.get(last_cell, 0)
+		if not at_sea and joins < 2:
+			stranded += 1
+
+	if width_errors > 0:
+		printerr("  %d point(s) hors de la largeur annoncee (%.1f - %.1f m)"
+			% [width_errors, RiverNetwork.WIDTH_MIN, RiverNetwork.WIDTH_MAX])
+		failures += 1
+	if above_ground > 0:
+		printerr("  %d point(s) dont le lit n'a pas ete creuse" % above_ground)
+		failures += 1
+	if stranded > 0:
+		printerr("  %d chemin(s) s'arretent sans rejoindre ni la mer ni un autre"
+			% stranded)
+		failures += 1
+
+	if depth_samples > 0:
+		var mean := depth_total / float(depth_samples)
+		print("  profondeur moyenne sous les berges : %.2f m (%d points a moins de 0,4 m)"
+			% [mean, shallow])
+		# Le seuil est volontairement bas : une bonne part du reseau traverse
+		# des plaines ou les berges ne depassent pas la profondeur minimale, et
+		# exiger la moyenne des deux bornes reviendrait a exiger du relief.
+		if mean < RiverNetwork.DEPTH_MIN * 0.6:
+			printerr("  le lit n'est pas un chenal : trop peu creuse en moyenne")
+			failures += 1
+
+	failures += _check_river_material(map)
+	return failures
+
+
+# 4. LA MATIERE DU FOND, mesuree dans le maillage reel.
+#
+# C'est le controle qui compte le plus, parce que c'est celui qui echouait sans
+# le dire. Le noyau de fondu du generateur porte a dix metres : un ruban de
+# gravier de deux metres y pesait moins de la moitie du melange, et le fond du
+# chenal se lisait comme de l'herbe un peu grise. Le creusement etait juste, et
+# invisible.
+#
+# FOND ET TALUS SONT MESURES SEPAREMENT, et c'est ce qui rend le chiffre
+# lisible. Le biome RIVER couvre tout le creusement, berges comprises ; exiger
+# que le gravier domine jusqu'au bord reviendrait a exiger qu'il n'y ait pas de
+# transition, alors que la transition est precisement ce qu'on veut la. On
+# demande donc au FOND de dominer, et au talus de simplement porter la matiere
+# — ce qui suffit au pinceau du shader pour l'y faire surgir par plaques.
+func _check_river_material(map: WorldMap) -> int:
+	var generator := TerrainGenerator.new()
+	generator.map = map
+
+	# Le fond, c'est-a-dire les colonnes a moins d'une demi-largeur de l'axe.
+	# Rasterise depuis le trace, la seule source qui connaisse l'axe.
+	var floor_cells := {}
+	for index in map.rivers.path_count():
+		var path := map.rivers.path(index)
+		@warning_ignore("integer_division")
+		var count: int = path.size() / 4
+		for k in count:
+			var px := path[k * 4]
+			var pz := path[k * 4 + 1]
+			var half_width := path[k * 4 + 3]
+			var span := ceili(half_width)
+			for dz in range(-span, span + 1):
+				for dx in range(-span, span + 1):
+					if sqrt(float(dx * dx + dz * dz)) > half_width:
+						continue
+					floor_cells[int(pz + dz) * map.size_xz + int(px + dx)] = true
+
+	var mesher := VoxelMesherTransvoxel.new()
+	mesher.texturing_mode = VoxelMesherTransvoxel.TEXTURES_MIXEL4_S4
+	mesher.textures_ignore_air_voxels = true
+
+	var expected: int = generator.layer_for(
+		map.surface_block(WorldMap.Biome.RIVER))
+	var seen := 0
+	var dominant := 0
+	var present := 0
+	var bank_seen := 0
+	var bank_present := 0
+	var visited_chunks := {}
+
+	# On echantillonne les chunks QUI CONTIENNENT du lit, plutot qu'une grille
+	# reguliere : a deux pour cent des terres, une grille les manquerait
+	# presque toujours.
+	for z in range(0, map.size_xz, 3):
+		for x in range(0, map.size_xz, 3):
+			if visited_chunks.size() >= 12:
+				break
+			if map.biome_at(x, z) != WorldMap.Biome.RIVER:
+				continue
+			@warning_ignore("integer_division")
+			var key := Vector3i(x / CHUNK, map.terrain_height(x, z) / CHUNK,
+				z / CHUNK)
+			if visited_chunks.has(key):
+				continue
+			visited_chunks[key] = true
+
+			var origin := key * CHUNK
+			var buffer := VoxelBuffer.new()
+			buffer.create(CHUNK, CHUNK, CHUNK)
+			generator._generate_block(buffer, origin, 0)
+			var mesh: ArrayMesh = mesher.build_mesh(buffer, [], {})
+			if mesh == null or mesh.get_surface_count() == 0:
+				continue
+			var arrays := mesh.surface_get_arrays(0)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var custom1: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM1]
+			@warning_ignore("integer_division")
+			var stride: int = custom1.size() / maxi(vertices.size(), 1)
+			if stride < 2:
+				continue
+
+			for i in vertices.size():
+				var world := Vector3(origin) + vertices[i]
+				var col_x := floori(world.x)
+				var col_z := floori(world.z)
+				if map.biome_at(col_x, col_z) != WorldMap.Biome.RIVER:
+					continue
+				if absf(world.y - float(map.terrain_height(col_x, col_z))) > 1.5:
+					continue
+				var carries := _has_layer(
+					custom1[i * stride], custom1[i * stride + 1], expected)
+				if not floor_cells.has(col_z * map.size_xz + col_x):
+					bank_seen += 1
+					if carries:
+						bank_present += 1
+					continue
+				seen += 1
+				if carries:
+					present += 1
+				if _dominant_layer(custom1[i * stride],
+						custom1[i * stride + 1]) == expected:
+					dominant += 1
+
+	if seen == 0:
+		printerr("  aucun sommet de fond dans les chunks echantillonnes")
+		return 1
+
+	var share := 100.0 * float(dominant) / float(seen)
+	print("  fond  : %.1f %% des sommets en gravier dominant, %.1f %% le portent (%d sommets)"
+		% [share, 100.0 * float(present) / float(seen), seen])
+	if bank_seen > 0:
+		print("  talus : %.1f %% portent le gravier (%d sommets)"
+			% [100.0 * float(bank_present) / float(bank_seen), bank_seen])
+
+	var failures := 0
+	# Le fond doit etre franchement graveleux : c'est la seule preuve que le
+	# noyau etroit tient face au fondu de dix metres.
+	if share < 70.0:
+		printerr("  le gravier du fond est noye par le fondu de surface")
+		failures += 1
+	# Le talus n'a pas a etre domine, mais il doit PORTER le gravier : sans lui
+	# parmi les quatre emplacements, le pinceau du shader n'a rien a delayer et
+	# la berge redevient un bord net.
+	if bank_seen > 0 and float(bank_present) / float(bank_seen) < 0.9:
+		printerr("  le talus ne porte pas le gravier : la berge sera un bord net")
+		failures += 1
+	return failures
 
 
 # Le reseau de grottes doit etre ACCESSIBLE, connexe, et sec.

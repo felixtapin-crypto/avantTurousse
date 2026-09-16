@@ -87,8 +87,24 @@ static func last_was_cached() -> bool:
 
 # Empreinte de TOUS les reglages de generation, lue par introspection.
 static func parameters_hash() -> int:
-	var script: GDScript = WorldMap
-	var constants := script.get_script_constant_map()
+	# Les TROIS fichiers qui decident de la forme du monde, et pas seulement
+	# `world_map.gd`.
+	#
+	# L'introspection ne voyait que celui-la, donc regler un rayon de galerie ou
+	# une largeur de chenal ne changeait pas l'empreinte : le cache servait une
+	# carte perimee, en silence, et on cherchait la panne dans le code de
+	# generation. C'est exactement le meme piege que le tri de StringName
+	# ci-dessous — une empreinte fausse ne se signale jamais d'elle-meme,
+	# puisque le monde qu'elle rend reste un monde valide.
+	var constants := {}
+	for entry in [["WorldMap", WorldMap], ["CaveNetwork", CaveNetwork],
+			["RiverNetwork", RiverNetwork]]:
+		var source: GDScript = entry[1]
+		var own := source.get_script_constant_map()
+		for key in own:
+			# Prefixe par le fichier : deux d'entre eux peuvent nommer une
+			# constante pareil sans que l'une efface l'autre.
+			constants["%s.%s" % [entry[0], key]] = own[key]
 
 	# Les cles sont converties en String AVANT d'etre triees, et ce n'est pas
 	# une precaution de style.

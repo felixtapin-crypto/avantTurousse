@@ -124,9 +124,41 @@ var map: WorldMap:
 		if map != null:
 			_build_tables()
 
+# Noyau ETROIT, pour les colonnes d'un lit de riviere : les deux premiers
+# anneaux seulement, soit deux metres de portee.
+#
+# La largeur du noyau n'est pas une constante physique, c'est une reponse a la
+# question « a quelle distance une limite de matiere doit-elle se dissoudre ».
+# Dix metres est la bonne reponse pour une limite de BIOME : elles sont
+# arbitraires, et une frontiere nette entre prairie et foret se lit comme un
+# trait de crayon.
+#
+# Un lit de riviere pose une autre question. Il fait un a quatre metres de
+# large : dans un disque de dix metres, le gravier n'occupe reellement qu'un
+# cinquieme de la surface, et le noyau large repond donc JUSTE — un tiers de
+# gravier — a une question qu'on n'aurait pas du poser. Mesure : 32,9 %
+# seulement des sommets de lit sortaient avec le gravier dominant, alors que
+# 96,8 % le portaient. Le chenal etait creuse, peint, et invisible.
+#
+# Un simple gain sur le poids ne s'en sort pas : ce qui rend le fond dominant
+# rend aussi dominantes les colonnes a deux metres, et on retombe sur un ruban
+# de gravier de six metres pour un chenal de deux.
+#
+# Les colonnes de BERGE gardent le noyau large, donc ~30 % de gravier : la
+# transition va de 80 a 30 % sur un metre, ce qui est une berge — un bord franc
+# entre le lit et l'herbe, que le pinceau du shader se charge de deliter.
+const RIVER_KERNEL := [
+	0, 0, 10,
+
+	2, 0, 5,   -2, 0, 5,   0, 2, 5,    0, -2, 5,
+	1, 1, 5,   1, -1, 5,   -1, 1, 5,   -1, -1, 5,
+]
+
 # Biome -> couche de surface. Le melange fait vingt-cinq lectures par colonne :
 # une table evite d'y refaire a chaque fois deux appels de fonction.
 var _biome_layer := PackedInt32Array()
+# Biome -> noyau de fondu a utiliser QUAND CE BIOME EST AU CENTRE.
+var _biome_kernel: Array = []
 # Matiere unique -> le couple (indices, poids) deja encode.
 var _single_material: Array[Vector2i] = []
 
@@ -351,10 +383,11 @@ func _surface_mix(wx: int, wz: int) -> Vector2i:
 	var totals := PackedInt32Array()
 	totals.resize(LAYER_COUNT)
 
-	for k in range(0, BLEND_KERNEL.size(), 3):
-		var layer := _biome_layer[
-			map.biome_at(wx + BLEND_KERNEL[k], wz + BLEND_KERNEL[k + 1])]
-		totals[layer] += BLEND_KERNEL[k + 2]
+	# C'est le biome AU CENTRE qui choisit la portee du fondu : voir RIVER_KERNEL.
+	var kernel: Array = _biome_kernel[map.biome_at(wx, wz)]
+	for k in range(0, kernel.size(), 3):
+		var layer := _biome_layer[map.biome_at(wx + kernel[k], wz + kernel[k + 1])]
+		totals[layer] += kernel[k + 2]
 
 	# Les quatre matieres les plus representees : au-dela, le format n'a plus
 	# de place. Selection par passes plutot que par tri — il n'y a que huit
@@ -402,8 +435,11 @@ func _surface_mix(wx: int, wz: int) -> Vector2i:
 # les appellerait vingt-cinq fois par colonne.
 func _build_tables() -> void:
 	_biome_layer.resize(WorldMap.Biome.size())
+	_biome_kernel.resize(WorldMap.Biome.size())
 	for biome in _biome_layer.size():
 		_biome_layer[biome] = layer_for(map.surface_block(biome))
+		_biome_kernel[biome] = RIVER_KERNEL \
+			if biome == WorldMap.Biome.RIVER else BLEND_KERNEL
 
 	# Le couple (indices, poids) d'une matiere UNIQUE, pour les huit couches.
 	# Meme regle que `_pad_to_four` : les trois emplacements libres recoivent des

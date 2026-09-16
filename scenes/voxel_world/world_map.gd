@@ -62,7 +62,7 @@ extends RefCounted
 # qu'on ait a y penser. Mais l'introspection ne voit pas le corps des
 # fonctions : sans ce compteur, une refonte de l'erosion servirait d'anciennes
 # cartes en silence.
-const GENERATION_VERSION := 2
+const GENERATION_VERSION := 3
 
 # --- Geometrie de l'ile ----------------------------------------------------
 const SEA_LEVEL := 30
@@ -134,12 +134,53 @@ const EROSION_N := 1.0            # exposant de la pente
 const EROSION_MAX := 4.0
 const SORT_BUCKETS := 2048        # finesse du tri par altitude
 
+# Comblement des cuvettes, avant toute accumulation d'ecoulement.
+#
+# UN ECOULEMENT D8 S'ARRETE DANS LE PREMIER TROU VENU. Un bruit fractal erode
+# puis lisse en compte des centaines : mesure sur une carte de 300, 244
+# cuvettes pour 38 000 colonnes emergees, et surtout SEULEMENT 37,6 % DES
+# COLONNES ATTEIGNAIENT LA MER en suivant la pente. Le debit ne s'accumulait
+# donc jamais sur une longue distance, et le quantile des rivieres designait
+# l'exutoire de chaque petit bassin ferme plutot qu'un collecteur.
+#
+# Ce defaut est aussi vieux que l'hydrologie de ce fichier. Il est reste
+# invisible tant qu'une riviere etait un trait d'une colonne sur la carte
+# d'apercu : des centaines de traits epars ressemblent a un reseau. Des qu'ils
+# sont devenus des chenaux creuses de trois metres, ils se sont lus pour ce
+# qu'ils etaient — des flaques sans amont ni aval.
+#
+# On comble donc par inondation prioritaire depuis la mer (Priority-Flood
+# d'epsilon, Barnes et al.) : chaque colonne recoit l'altitude a laquelle
+# l'eau l'atteindrait, soit la sienne, soit le seuil qu'il a fallu franchir
+# pour venir jusqu'a elle. Toute colonne a alors un voisin strictement plus
+# bas — celui d'ou l'inondation est venue — donc plus aucun trou.
+#
+# Le resultat va dans un champ SEPARE. Combler le vrai relief remonterait le
+# fond de chaque dépression du terrain, c'est-a-dire modifierait un paysage
+# qui convient ; ici on ne corrige que la carte sur laquelle l'eau CHOISIT son
+# chemin, pas celle qu'on voit.
+const FILL_EPSILON := 0.005
+# Finesse de la file de priorite. Deux colonnes du meme seau sortent dans un
+# ordre quelconque, et c'est sans danger : quelle que soit la sortie, toute
+# colonne inondee garde un parent strictement plus bas, donc aucune cuvette ne
+# peut renaitre. On n'y perd qu'un comblement legerement moins econome.
+const FILL_BUCKETS := 4096
+
 # Fraction des colonnes emergees qui portent une riviere. Un seuil de debit
 # EN DUR ne peut pas marcher : le debit d'une colonne est le nombre de
 # colonnes qui s'ecoulent a travers elle, donc il croit avec la surface de la
 # carte. La meme constante donnerait des rivieres partout sur une grande
 # carte et aucune sur une petite. On vise donc un quantile.
-const RIVER_FRACTION := 0.008
+#
+# Attention : cette fraction compte les colonnes de la LIGNE d'ecoulement, pas
+# celles du chenal. Elargies a un lit de 1 a 4 m borde de ses berges (voir
+# `river_network.gd`), elles couvrent environ dix fois cette surface.
+#
+# C'est ce qui a impose de la diviser par deux en passant du ruban d'une colonne
+# au vrai chenal : a 0,008 le creusement occupait 7,7 % des terres, et l'ile
+# ressemblait a un marecage. C'est ce curseur-ci qu'on bouge quand le reseau
+# parait dense, jamais la largeur du lit, qui est une demande.
+const RIVER_FRACTION := 0.004
 
 # --- Climat ----------------------------------------------------------------
 # Temperature et humidite sont normalisees entre 0 et 1.
@@ -242,6 +283,17 @@ var _heights: PackedInt32Array      # altitude du sol, entiere, apres erosion
 var _height_f: PackedFloat32Array   # la meme, en flottant, pendant la generation
 var _continentality: PackedFloat32Array # 0 au rivage, 1 au coeur des terres
 var _flow: PackedFloat32Array       # debit accumule
+# Relief SANS cuvette, servant uniquement a decider ou l'eau va. Voir
+# FILL_EPSILON : c'est le seul champ sur lequel une descente ne s'arrete
+# jamais avant la mer. Le relief visible, lui, garde ses creux.
+var _drain: PackedFloat32Array
+# Voisin vers lequel chaque colonne s'ecoule, -1 si elle n'en a pas (bord,
+# mer, cuvette). Sous-produit de l'accumulation d'ecoulement, conserve parce
+# que le trace des rivieres en a besoin : le recalculer serait cinq millions
+# d'operations pour retrouver le meme tableau, et surtout deux copies d'une
+# meme regle a garder d'accord. Purement interne a la generation, donc jamais
+# mis en cache.
+var _receiver: PackedInt32Array
 # Champs climatiques conserves apres la generation : ils servent au placement
 # de la vegetation et de la faune (chaque espece declarera ses tolerances),
 # et ils rendent un calibrage de biome inspectable au lieu d'etre a deviner.
@@ -267,6 +319,11 @@ var progress := 0.0
 var cancel_requested := false
 
 var caves: CaveNetwork = CaveNetwork.new()
+# Reseau de rivieres. A la difference des grottes, il est TAMPONNE dans les
+# hauteurs plutot qu'evalue par voxel — voir `river_network.gd`. Le trace
+# survit a la generation parce que les hauteurs en cache sont deja creusees :
+# retracer dessus suivrait le chenal au lieu de le reproduire.
+var rivers: RiverNetwork = RiverNetwork.new()
 var _min_height := 0
 var _max_height := 0
 
@@ -284,6 +341,10 @@ func _init(world_size_xz: int = 600, world_size_y: int = 64) -> void:
 	_continentality.resize(columns)
 	_flow = PackedFloat32Array()
 	_flow.resize(columns)
+	_drain = PackedFloat32Array()
+	_drain.resize(columns)
+	_receiver = PackedInt32Array()
+	_receiver.resize(columns)
 	_temperature = PackedFloat32Array()
 	_temperature.resize(columns)
 	_moisture = PackedFloat32Array()
@@ -404,6 +465,18 @@ func flow_at(x: int, z: int) -> float:
 	return _flow[z * size_xz + x]
 
 
+# Cette colonne est-elle un lit de riviere ?
+#
+# Lu dans les BIOMES et non dans le masque du reseau : le masque ne vit que le
+# temps de la generation, alors que les biomes partent au cache. Une carte
+# rechargee repond donc aussi bien qu'une carte fraiche.
+#
+# Appele par `cave_network.gd` sur une reference NON TYPEE, ce qui est ce qui
+# evite le cycle de classes entre les deux fichiers.
+func is_river(x: int, z: int) -> bool:
+	return biome_at(x, z) == Biome.RIVER
+
+
 # Contribution de la latitude a la temperature, isolee du reste. Purement
 # pour l'affichage : elle permet de voir ou passe l'equateur du monde, que
 # l'altitude et le bruit masquent sur la carte de temperature.
@@ -454,17 +527,43 @@ func generate(seed_value: int) -> void:
 	_apply_hydrology()
 	if cancel_requested:
 		return
+	progress = 0.72
+
+	# Le reseau est TRACE ici, sur le relief final, mais il ne creuse pas
+	# encore : le creusement attend que les biomes soient poses. Voir plus bas.
+	#
+	# Le seuil est calcule UNE fois et passe aux deux etapes qui s'en servent :
+	# c'est un histogramme sur toute la carte, et le recalculer coutait une
+	# seconde traversee pour un resultat identique.
+	var river_flow := _river_threshold()
+	rivers.build(_height_f, _flow, _receiver, size_xz, SEA_LEVEL, river_flow)
+	if cancel_requested:
+		return
 	progress = 0.80
 
 	_build_rain_shadow()
 	if cancel_requested:
 		return
-	progress = 0.90
+	progress = 0.88
 
-	_classify(seed_value)
+	_classify(seed_value, river_flow)
 	if cancel_requested:
 		return
-	progress = 0.95
+	progress = 0.94
+
+	# CREUSER APRES AVOIR CLASSE, et c'est le point delicat de tout l'ordre.
+	#
+	# `_biome_for` fait passer la pente avant le climat : au-dela de
+	# SLOPE_SCREE une colonne devient un eboulis, au-dela de SLOPE_ROCK une
+	# rocaille. Or les berges d'un chenal de deux metres de fond depassent
+	# largement les deux. Creuser d'abord borderait donc CHAQUE riviere de
+	# rubans d'eboulis et de rocaille, et rognerait au passage la foret et la
+	# prairie qu'elle traverse.
+	#
+	# On classe donc le PAYSAGE, puis on y estampe le chenal.
+	_height_f = rivers.carve(_height_f)
+	_refresh_heights()
+	progress = 0.96
 
 	_min_height = size_y
 	_max_height = 0
@@ -589,13 +688,103 @@ func _build_base_relief(seed_value: int) -> void:
 # relief s'aplatit sans gagner en lisibilite.
 func _apply_hydrology() -> void:
 	for pass_index in EROSION_PASSES:
+		_fill_depressions()
 		_accumulate_flow()
 		_incise()
-	# Le debit final est recalcule apres la derniere incision : c'est celui-la
-	# qui sert a placer les rivieres et a nourrir l'humidite, donc il doit
-	# correspondre au relief definitif et non a celui d'avant erosion.
-	_accumulate_flow()
+	# Le lissage passe AVANT le dernier calcul de debit, et non apres.
+	#
+	# C'est celui-la qui sert a placer les rivieres, a tracer leur lit et a
+	# nourrir l'humidite : il doit donc decrire le relief DEFINITIF. Calcule
+	# avant le lissage, il decrivait un terrain qui n'existe plus au moment ou
+	# on s'en sert, et le chenal creuse ne suivait pas tout a fait la vallee
+	# qu'on voit.
 	_smooth_heights()
+	_fill_depressions()
+	_accumulate_flow()
+
+
+# Inondation prioritaire depuis la mer : voir FILL_EPSILON pour le pourquoi.
+#
+# On part du trait de cote et on remonte les terres en traitant toujours la
+# colonne la plus basse encore atteignable. Chacune recoit `max(son altitude,
+# celle d'ou l'eau vient + epsilon)` : une colonne haute garde la sienne, une
+# colonne en creux prend le niveau du seuil qu'il a fallu franchir. Le petit
+# epsilon donne au fond comble une pente residuelle vers son exutoire, sans
+# quoi il serait parfaitement plat et la descente s'y arreterait tout autant.
+#
+# La file de priorite est un tableau de seaux et non un tas : l'altitude de
+# sortie ne decroit jamais, donc il suffit de balayer les seaux dans l'ordre.
+# Un tas binaire en GDScript couterait un appel interprete par comparaison,
+# soit des dizaines de millions pour une carte de 800.
+func _fill_depressions() -> void:
+	var n := size_xz * size_xz
+	_drain = _height_f.duplicate()
+
+	var lo := INF
+	var hi := -INF
+	for h in _height_f:
+		lo = minf(lo, h)
+		hi = maxf(hi, h)
+	var scale := float(FILL_BUCKETS - 1) / maxf(hi - lo, 0.001)
+
+	# Seaux en Array et non en PackedInt32Array : les tableaux compacts sont
+	# des types VALEUR, et `seaux[b].append(...)` travaillerait sur une copie.
+	var buckets: Array = []
+	buckets.resize(FILL_BUCKETS)
+	for b in FILL_BUCKETS:
+		buckets[b] = []
+
+	# La mer n'a rien a combler : on la ferme d'un bloc, et seul le trait de
+	# cote sert d'amorce. L'inondation ne parcourt donc que les terres.
+	var closed := PackedByteArray()
+	closed.resize(n)
+	var sea := float(SEA_LEVEL)
+	for i in n:
+		if _height_f[i] <= sea:
+			closed[i] = 1
+
+	var offsets := [-size_xz, size_xz, -1, 1,
+		-size_xz - 1, -size_xz + 1, size_xz - 1, size_xz + 1]
+
+	for z in range(1, size_xz - 1):
+		for x in range(1, size_xz - 1):
+			var i := z * size_xz + x
+			if closed[i] == 0:
+				continue
+			for d in 8:
+				if closed[i + offsets[d]] == 0:
+					buckets[clampi(int((_drain[i] - lo) * scale),
+						0, FILL_BUCKETS - 1)].append(i)
+					break
+
+	var b := 0
+	while b < FILL_BUCKETS:
+		var bucket: Array = buckets[b]
+		if bucket.is_empty():
+			b += 1
+			continue
+		# Vide le seau avant de le parcourir : traiter une colonne peut en
+		# reverser dans CE seau-ci (meme altitude), et la boucle exterieure les
+		# reprendra au tour suivant sans avancer.
+		buckets[b] = []
+		for c in bucket:
+			var cx: int = c % size_xz
+			@warning_ignore("integer_division")
+			var cz: int = c / size_xz
+			if cx <= 0 or cz <= 0 or cx >= size_xz - 1 or cz >= size_xz - 1:
+				continue
+			var level: float = _drain[c] + FILL_EPSILON
+			for d in 8:
+				var j: int = c + offsets[d]
+				if closed[j] != 0:
+					continue
+				closed[j] = 1
+				var w := maxf(_height_f[j], level)
+				_drain[j] = w
+				# Jamais en-deca du seau courant : l'altitude d'inondation ne
+				# decroit pas, et c'est ce qui rend le balayage valide.
+				buckets[maxi(clampi(int((w - lo) * scale), 0, FILL_BUCKETS - 1),
+					b)].append(j)
 
 
 # Accumulation d'ecoulement facon D8 : chaque colonne verse tout ce qu'elle a
@@ -605,6 +794,7 @@ func _apply_hydrology() -> void:
 func _accumulate_flow() -> void:
 	var n := size_xz * size_xz
 	_flow.fill(1.0)
+	_receiver.fill(-1)
 
 	var order := _cells_by_descending_height()
 
@@ -623,17 +813,24 @@ func _accumulate_flow() -> void:
 		if x <= 0 or z <= 0 or x >= size_xz - 1 or z >= size_xz - 1:
 			continue
 
-		var h := _height_f[i]
+		# La descente se decide sur le relief COMBLE et non sur le relief
+		# visible : c'est la seule surface ou une descente ne s'arrete jamais
+		# avant la mer (voir `_fill_depressions`).
+		var h := _drain[i]
 		var best := -1
 		var best_drop := 0.0
 		for d in 8:
 			var j: int = i + offsets[d]
-			var drop: float = (h - _height_f[j]) * inv_dist[d]
+			var drop: float = (h - _drain[j]) * inv_dist[d]
 			if drop > best_drop:
 				best_drop = drop
 				best = j
 		if best >= 0:
 			_flow[best] += _flow[i]
+			# Le recepteur est conserve : c'est le squelette du reseau
+			# hydrographique, et `river_network.gd` le reprend tel quel pour
+			# tracer les chenaux plutot que de re-deriver la meme regle.
+			_receiver[i] = best
 
 
 # Tri des colonnes par altitude decroissante, par comptage sur une altitude
@@ -646,7 +843,7 @@ func _cells_by_descending_height() -> PackedInt32Array:
 	var lo := INF
 	var hi := -INF
 	for i in n:
-		var h := _height_f[i]
+		var h := _drain[i]
 		if h < lo:
 			lo = h
 		if h > hi:
@@ -658,7 +855,7 @@ func _cells_by_descending_height() -> PackedInt32Array:
 	var bucket_of := PackedInt32Array()
 	bucket_of.resize(n)
 	for i in n:
-		var b := int((_height_f[i] - lo) / span * float(SORT_BUCKETS - 1))
+		var b := int((_drain[i] - lo) / span * float(SORT_BUCKETS - 1))
 		bucket_of[i] = b
 		counts[b] += 1
 
@@ -726,7 +923,7 @@ func _smooth_heights() -> void:
 
 
 # Etape 3 et 4 : climat puis biome, par colonne.
-func _classify(seed_value: int) -> void:
+func _classify(seed_value: int, river_flow: float) -> void:
 	var temp_noise := FastNoiseLite.new()
 	temp_noise.seed = seed_value + 5
 	temp_noise.frequency = 0.004
@@ -735,7 +932,6 @@ func _classify(seed_value: int) -> void:
 	moist_noise.seed = seed_value + 6
 	moist_noise.frequency = 0.005
 
-	var river_flow := _river_threshold()
 	var flow_scale := 1.0 / maxf(log(1.0 + river_flow * 4.0), 1.0)
 
 	for z in size_xz:
@@ -766,16 +962,33 @@ func _classify(seed_value: int) -> void:
 				+ moist_noise.get_noise_2d(float(x), float(z)) * MOIST_NOISE
 			moist = clampf(moist, 0.0, 1.0)
 
-			var is_river := _flow[i] >= river_flow and height > SEA_LEVEL
-			if is_river:
-				# Le lit est creuse d'un voxel pour que l'eau y tienne au lieu
-				# de napper la plaine autour.
-				height = maxi(height - 1, SEA_LEVEL)
+			# Le lit vient du RESEAU TRACE, pas d'une comparaison de debit.
+			#
+			# Le debit seuille ne designe qu'une ligne d'ecoulement large d'une
+			# colonne ; le reseau, lui, connait la largeur reelle du chenal a
+			# cet endroit. La colonne n'est plus baissee d'un voxel non plus :
+			# `rivers.carve()` s'en charge, avec un vrai profil.
+			var is_river := rivers.is_bed(x, z) and height > SEA_LEVEL
 
 			_temperature[i] = temp
 			_moisture[i] = moist
 			_heights[i] = height
 			_biomes[i] = _biome_for(height, _slope_f(i), temp, moist, is_river)
+
+
+# Re-derive les altitudes ENTIERES depuis le champ flottant.
+#
+# `_classify` les a deja posees, mais le creusement des rivieres passe apres
+# lui : sans ce rattrapage, `terrain_height()` rendrait l'altitude d'avant le
+# chenal alors que `terrain_height_f()` rendrait celle d'apres. Le generateur
+# lit les DEUX — l'une pour la distance signee, l'autre pour la stratification
+# et l'epaisseur de surface — et le desaccord ferait flotter la matiere
+# au-dessus du lit.
+#
+# Le clamp est le meme que dans `_classify`, et il doit le rester.
+func _refresh_heights() -> void:
+	for i in _heights.size():
+		_heights[i] = clampi(int(round(_height_f[i])), BEDROCK_DEPTH, size_y - 2)
 
 
 # Debit a partir duquel une colonne porte une riviere, choisi comme quantile
@@ -915,6 +1128,12 @@ func capture_state() -> Dictionary:
 		"biomes": _biomes,
 		"min_height": _min_height,
 		"max_height": _max_height,
+		# Le trace des chenaux, quelques dizaines de kilo-octets. Contrairement
+		# au reseau de grottes, il ne peut PAS se re-deriver : les hauteurs en
+		# cache sont deja creusees, donc les retracer suivrait le chenal
+		# existant au lieu de le reproduire. C'est aussi ce dont aura besoin la
+		# surface d'eau, quand elle viendra.
+		"rivers": rivers.capture(),
 	}
 
 
@@ -939,6 +1158,7 @@ func restore_state(data: Dictionary) -> bool:
 	_biomes = data["biomes"]
 	_min_height = int(data["min_height"])
 	_max_height = int(data["max_height"])
+	rivers.restore(data.get("rivers", {}), size_xz)
 
 	# Le reseau est RECALCULE plutot que stocke. Il derive entierement de la
 	# graine et des hauteurs, toutes deux dans le cache : le stocker reviendrait
