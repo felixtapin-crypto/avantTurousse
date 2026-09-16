@@ -43,8 +43,6 @@ var _size_buttons: Array[Button] = []
 var _biome_rows: VBoxContainer
 var _play_button: Button
 var _cache_label: Label
-var _pack_buttons: Array[Dictionary] = []
-var _pack_strip: HBoxContainer
 
 
 func _ready() -> void:
@@ -195,26 +193,6 @@ func _build_side_column() -> Control:
 	side.add_child(figures)
 
 	side.add_child(_gap(10))
-	side.add_child(_caption("PACK DE TEXTURES"))
-	var pack_row := HBoxContainer.new()
-	pack_row.add_theme_constant_override("separation", 6)
-	for pack in TexturePacks.available():
-		var button := _pill(pack["name"])
-		button.tooltip_text = pack["note"]
-		var id: String = pack["id"]
-		button.pressed.connect(func(): _select_pack(id))
-		_pack_buttons.append({"id": id, "button": button})
-		pack_row.add_child(button)
-	side.add_child(pack_row)
-
-	# Bande d'apercu des huit couches : un selecteur de textures sans les
-	# textures ne dit rien. Elle montre aussi, au passage, que les matieres se
-	# distinguent bien les unes des autres.
-	_pack_strip = HBoxContainer.new()
-	_pack_strip.add_theme_constant_override("separation", 3)
-	side.add_child(_pack_strip)
-
-	side.add_child(_gap(10))
 	side.add_child(_caption("BIOMES"))
 	_biome_rows = VBoxContainer.new()
 	_biome_rows.add_theme_constant_override("separation", 7)
@@ -250,7 +228,6 @@ func _build_side_column() -> Control:
 	side.add_child(_play_button)
 
 	_select_size(SIZES.find(WorldSettings.size))
-	_select_pack(WorldSettings.texture_pack)
 	return side
 
 
@@ -480,23 +457,3 @@ func _bar(color: Color) -> StyleBoxFlat:
 func _refresh_cache_label() -> void:
 	_cache_label.text = "Cache · %d carte(s) · empreinte %x" % [
 		MapCache.entry_count(), MapCache.parameters_hash() & 0xffffffff]
-
-
-func _select_pack(id: String) -> void:
-	WorldSettings.texture_pack = id
-	for entry in _pack_buttons:
-		_mark_selected(entry["button"], entry["id"] == id)
-	_refresh_pack_strip(id)
-
-
-func _refresh_pack_strip(id: String) -> void:
-	for child in _pack_strip.get_children():
-		child.queue_free()
-	for image in TexturePacks.layer_images(id):
-		var chip := TextureRect.new()
-		chip.texture = ImageTexture.create_from_image(image)
-		chip.custom_minimum_size = Vector2(0, 30)
-		chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		chip.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		chip.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		_pack_strip.add_child(chip)

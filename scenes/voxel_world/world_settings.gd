@@ -15,11 +15,6 @@ static var seed_value: int = 1
 static var size: int = 600
 static var height: int = 64
 
-# Identifiant du pack de textures du terrain. "procedural" est celui genere a
-# partir de la palette du projet ; les autres sont des dossiers d'images
-# deposes sous res://assets/texture_packs (voir texture_packs.gd).
-static var texture_pack: String = TexturePacks.PROCEDURAL_ID
-
 # Renseigne quand l'ecran d'apercu a deja calcule cette carte : la scene de
 # jeu la reprend telle quelle au lieu de refaire 1,6 s de calcul pour
 # retomber exactement sur le meme resultat.

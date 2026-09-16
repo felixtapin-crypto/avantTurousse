@@ -130,10 +130,16 @@ func _build_mesher() -> VoxelMesherTransvoxel:
 func _terrain_material() -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = load("res://scenes/voxel_world/smooth_terrain.gdshader")
-	material.set_shader_parameter("u_albedo_array", TexturePacks.build(WorldSettings.texture_pack))
-	material.set_shader_parameter("u_texture_scale", 0.15)
-	material.set_shader_parameter("u_roughness", 1.0)
-	material.set_shader_parameter("u_tint_strength", 1.0)
+	material.set_shader_parameter("u_albedo_array", TerrainTextures.albedo_array())
+	material.set_shader_parameter("u_normal_array", TerrainTextures.normal_array())
+	# L'echelle est donnee PAR MATIERE, en metres reels : les textures vont de
+	# 1,4 m a 3,5 m de cote, donc une repetition unique les ferait paraitre
+	# deux fois et demie differentes les unes des autres.
+	material.set_shader_parameter("u_layer_meters", TerrainTextures.meters())
+	material.set_shader_parameter("u_layer_roughness", TerrainTextures.roughness())
+	material.set_shader_parameter("u_scale", 1.0)
+	material.set_shader_parameter("u_normal_strength", 1.0)
+	material.set_shader_parameter("u_blend_sharpness", 3.0)
 	return material
 
 
