@@ -1,80 +1,44 @@
 # Suivi de travail et coordination
 
-Objectif de ce fichier : que personne ne découvre en pullant que l'autre a
-retravaillé le même système en parallèle. Le principe est simple :
+Le suivi des tâches (à faire / en cours / terminé) se fait maintenant sur le
+**Project GitHub** :
+
+**https://github.com/users/felixtapin-crypto/projects/2**
+
+Toutes les tâches qui étaient listées ici ont été migrées en issues sur ce
+board (une par tâche, avec un lien vers la section de `DESIGN.md`
+correspondante quand pertinent).
+
+## Protocole de coordination
+
+L'objectif reste le même qu'avant : que personne ne découvre en pullant que
+l'autre a retravaillé le même système en parallèle.
 
 1. **Avant de commencer un morceau non-trivial** (un système, pas une
-   correction de bug d'une ligne), ajoute une ligne dans "En cours" avec ton
-   nom, la date, et ce que tu attaques.
-2. **Avant de toucher à un système déjà pris par l'autre**, ou à quelque
-   chose qui touche l'architecture commune (format de sauvegarde, structure
-   des voxels, code réseau), préviens-le (message, appel, peu importe) avant
-   de coder, pas après.
-3. Quand c'est fini (ou abandonné), déplace la ligne dans "Terminé
-   récemment" avec un lien vers la commit/PR si possible, et nettoie de temps
-   en temps les entrées trop vieilles.
-4. Committe et pull souvent (idéalement à chaque session), surtout pour ce
-   fichier et pour `DESIGN.md` — ce sont les deux fichiers qu'on modifie tous
-   les deux, donc les divergences dessus doivent être résolues vite avant de
-   diverger sur le code.
+   correction de bug d'une ligne), passe l'issue correspondante en "In
+   Progress" sur le Project et assigne-toi-la. Si aucune issue n'existe pour
+   ce que tu attaques, crées-en une d'abord.
+2. **Avant de toucher à un système déjà pris par quelqu'un d'autre**, ou à
+   quelque chose qui touche l'architecture commune (format de sauvegarde,
+   structure des voxels, code réseau), préviens-le (message, appel, peu
+   importe) avant de coder, pas après.
+3. Quand c'est fini (ou abandonné), ferme l'issue (ou repasse-la en "Todo"
+   si abandonné), idéalement en la liant à la commit/PR correspondante.
+4. Committe et pull souvent (idéalement à chaque session), surtout pour
+   `DESIGN.md` — c'est le fichier qu'on modifie tous les deux, donc les
+   divergences dessus doivent être résolues vite avant de diverger sur le
+   code.
 
 Fichiers particulièrement sensibles aux conflits (à ne pas éditer à deux en
 même temps sans se prévenir) : les scènes `.tscn` (fusion textuelle mais
 casse-tête à relire), `project.godot`, et tout futur fichier de format de
 sauvegarde.
 
-## En cours
+## Historique (avant la migration vers le Project)
 
-_(vide pour l'instant — ajoutez une ligne quand vous démarrez quelque chose)_
-
-| Qui | Depuis le | Sur quoi |
-|-----|-----------|----------|
-|     |           |          |
-
-## À faire / idées non assignées
-
-Repris de la feuille de route dans `DESIGN.md` — à affiner/découper en
-tâches plus petites au fur et à mesure :
-
-- [ ] Biomes sur la plateforme générée (forêt, rocher, point d'eau...)
-- [ ] Caméra : ajouter un SpringArm3D pour éviter que la caméra 3e
-  personne traverse les murs/le terrain aux angles extrêmes
-- [ ] Performance : si creuser/construire devient perceptiblement lent en
-  jeu (on reconstruit tout le maillage de la plateforme a chaque coup),
-  decouper `Platform` en chunks pour ne reconstruire que la zone touchee
-- [ ] Vraie grille de voxels 3D (grottes naturelles, structures avec un
-  toit separe du sol) — le systeme actuel ne fait que monter/descendre la
-  hauteur d'une colonne, pas de veritable volume
-- [ ] Jour/nuit : maintenant que l'horloge (gabarit "L'horloge" dans
-  DESIGN.md, implementee) affiche l'heure explicitement a l'ecran une fois
-  trouvee, ce n'est plus purement cosmetique — passer sur une horloge
-  faisant autorite cote hote (avec sync reseau) devient plus important
-  qu'avant, pour eviter que les deux joueurs lisent une heure legerement
-  differente. Pour l'instant
-  chaque pair calcule independamment (voir `day_night_cycle.gd` et
-  `World.is_raining`), ce qui est correct seulement tant que c'est
-  purement cosmetique/pas affiche comme une donnee fiable au joueur
-- [ ] Meteo : faire reagir les nuages (plus denses/sombres quand il pleut)
-- [ ] Generaliser `Collectible` : pour l'instant code en dur pour
-  l'horloge (un seul type d'artefact) — a parametrer (type + effet) des
-  qu'un deuxieme gabarit d'enigme arrive
-- [ ] Vrai systeme d'indices/repères nommés (voir DESIGN.md) : l'horloge
-  se trouve aujourd'hui juste en explorant, sans indice textuel genere
-- [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
-- [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler
-- [ ] Construction d'abri (pose de blocs)
-- [ ] Système de gabarits d'énigmes + chaîne d'indices (version fixe d'abord)
-- [ ] Génération de la chaîne de quête + repères nommés
-- [ ] Œuf : éclosion, élevage, condition de victoire
-- [ ] Chat vocal intégré (capture micro, envoi réseau, lecture chez l'autre
-  joueur) — pas urgent, on utilise Discord en attendant pour les tests.
-  Prévoir : format de compression (Opus si dispo), canal réseau dédié
-  (probablement non-fiable/unreliable vu le volume de données), et un
-  indicateur visuel de qui parle.
-- [ ] Sauvegarde / chargement
-- [ ] Répondre aux "Questions ouvertes" de `DESIGN.md`
-
-## Terminé récemment
+Gardé pour mémoire — les entrées ci-dessous ne seront plus mises à jour ;
+l'avancement futur se lit sur le Project (issues fermées) et dans les
+messages de commit.
 
 - 2026-09-16 — Squelette réseau initial (menu héberger/rejoindre, ENet,
   spawn de joueurs synchronisé) — à conserver, mais le contrôleur joueur et
@@ -139,3 +103,6 @@ tâches plus petites au fur et à mesure :
   facon deterministe (meme foret, meme arbre chez les deux joueurs, sans
   reseau), ramassable par clic, debloque l'affichage de l'heure pour toute
   l'equipe des qu'un joueur la trouve. Voir `vegetation.gd`, `collectible.gd`.
+- 2026-09-16 — Migration du suivi de tâches de ce fichier vers un GitHub
+  Project (voir le lien en haut). Les 17 tâches de la section "À faire"
+  sont devenues des issues sur le board.
