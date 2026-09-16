@@ -67,26 +67,50 @@ static func normal_array() -> Texture2DArray:
 # Hauteurs (carte `Displacement` d'ambientCG). Elles ne deplacent aucun sommet :
 # elles servent a departager deux matieres qui se recouvrent, pour que la plus
 # haute perce l'autre au lieu de se fondre avec elle.
+#
+# Son repli lui est PROPRE, et ce n'est pas un detail. Les aplats generes sont
+# un repli acceptable pour un albedo ; en hauteurs ils sont un piege, car la
+# matiere au rouge le plus fort gagne alors partout — silencieusement, sans
+# rien qui ressemble a une erreur. C'est exactement ce qui est arrive : les
+# huit cartes n'avaient pas ete importees par Godot, le repli s'est declenche,
+# et le melange a tourne plusieurs captures durant sur des couleurs plates.
 static func height_array() -> Texture2DArray:
-	return _array("height")
+	return _array("height", _flat_height_array)
 
 
-static func _array(suffix: String) -> Texture2DArray:
+# Hauteur uniforme : le melange retombe alors sur le seul poids des voxels,
+# ce qui est neutre, au lieu de favoriser une matiere au hasard.
+static func _flat_height_array() -> Texture2DArray:
+	var images: Array[Image] = []
+	for _name in NAMES:
+		var image := Image.create_empty(4, 4, false, Image.FORMAT_RGB8)
+		image.fill(Color(0.5, 0.5, 0.5))
+		images.append(image)
+	var array := Texture2DArray.new()
+	array.create_from_images(images)
+	return array
+
+
+static func _array(suffix: String, fallback := Callable()) -> Texture2DArray:
+	if not fallback.is_valid():
+		fallback = ProceduralTextures.build
+
 	var images: Array[Image] = []
 	for name in NAMES:
 		var image := _load("%s/%s_%s.jpg" % [DIR, name, suffix])
 		if image == null:
-			# Repli sur les aplats generes : un depot incomplet doit rester
-			# jouable plutot que de refuser de demarrer.
-			push_warning("Texture %s_%s absente, retour aux couleurs generees" % [name, suffix])
-			return ProceduralTextures.build()
+			# Un depot incomplet doit rester jouable plutot que de refuser de
+			# demarrer. Le message dit quelle CARTE manque : sans cela on croit
+			# a un probleme d'albedo alors qu'il s'agit des hauteurs.
+			push_warning("Carte %s_%s absente, repli en place" % [name, suffix])
+			return fallback.call()
 		images.append(image)
 
 	var size := images[0].get_size()
 	for i in images.size():
 		if images[i].get_size() != size:
 			push_warning("%s_%s fait %v au lieu de %v" % [NAMES[i], suffix, images[i].get_size(), size])
-			return ProceduralTextures.build()
+			return fallback.call()
 		images[i].generate_mipmaps()
 
 	var array := Texture2DArray.new()
