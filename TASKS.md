@@ -36,10 +36,15 @@ _(vide pour l'instant — ajoutez une ligne quand vous démarrez quelque chose)_
 Repris de la feuille de route dans `DESIGN.md` — à affiner/découper en
 tâches plus petites au fur et à mesure :
 
-- [ ] Casser/poser des voxels + inventaire minimal
 - [ ] Biomes sur la plateforme générée (forêt, rocher, point d'eau...)
 - [ ] Caméra : ajouter un SpringArm3D pour éviter que la caméra 3e
   personne traverse les murs/le terrain aux angles extrêmes
+- [ ] Performance : si creuser/construire devient perceptiblement lent en
+  jeu (on reconstruit tout le maillage de la plateforme a chaque coup),
+  decouper `Platform` en chunks pour ne reconstruire que la zone touchee
+- [ ] Vraie grille de voxels 3D (grottes naturelles, structures avec un
+  toit separe du sol) — le systeme actuel ne fait que monter/descendre la
+  hauteur d'une colonne, pas de veritable volume
 - [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
 - [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler
 - [ ] Construction d'abri (pose de blocs)
@@ -90,3 +95,14 @@ tâches plus petites au fur et à mesure :
 - 2026-09-16 — Camera passee en 3e personne (CameraPivot + Camera3D
   decale derriere/au-dessus, voir `scenes/player/player.gd`). Pas encore
   de SpringArm3D pour eviter le clipping dans le decor, note en tache.
+- 2026-09-16 — Tailscale installe et fonctionnel sur cette machine (reste
+  a se connecter avec `tailscale up` et a faire pareil chez l'autre
+  joueur). Chat vocal : Discord en attendant, vrai chat integre en tache.
+- 2026-09-16 — Premiere version de "creuser/construire" : clic gauche
+  creuse (baisse la colonne visee de 1m, +1 bloc), clic droit construit
+  (+1m, -1 bloc). Base sur `Platform.column_edits` (sculpte la hauteur
+  d'une colonne, pas encore une vraie grille 3D — voir taches ci-dessus).
+  Synchronise en reseau via `Platform.request_edit` (RPC any_peer,
+  call_local). L'engin volant de la cinematique d'arrivee reste
+  desormais sur la plateforme comme epave apres l'atterrissage
+  (`World.spawn_wreck`, aussi en RPC), au lieu de disparaitre.

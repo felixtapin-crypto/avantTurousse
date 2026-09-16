@@ -14,8 +14,10 @@ Jeu 3D multijoueur (2 joueurs pour l'instant), fait avec [Godot 4](https://godot
 ## Contrôles
 
 - **Z/Q/S/D** (physiquement les touches W/A/S/D, donc affichées différemment sur un clavier AZERTY) : se déplacer.
-- **Souris** : regarder autour de soi.
+- **Souris** : regarder autour de soi (vue à la 3e personne).
 - **Espace** : sauter.
+- **Clic gauche** : creuser (baisse le terrain visé d'1m, donne un bloc).
+- **Clic droit** : construire (monte le terrain visé d'1m, coûte un bloc).
 - **Échap** : libérer la souris (re-cliquer dans la fenêtre pour la recapturer).
 
 ## Tester en multijoueur en local (sur une seule machine)
