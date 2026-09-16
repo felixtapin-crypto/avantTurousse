@@ -65,7 +65,7 @@ func _build_heightmap(seed_value: int) -> void:
 
 			var raw_height := base_height + height_noise.get_noise_2d(float(x), float(z)) * height_variation
 			# rapproche la hauteur de 0 pres du bord -> effet de falaise/rivage
-			var edge_falloff := clamp((local_radius - dist) / 6.0, 0.0, 1.0)
+			var edge_falloff := clampf((local_radius - dist) / 6.0, 0.0, 1.0)
 			heights[index] = raw_height * edge_falloff
 
 
