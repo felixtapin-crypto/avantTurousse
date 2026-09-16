@@ -21,6 +21,13 @@ const HARVEST_HUNGER_RESTORE := 35.0
 const DRINK_THIRST_RESTORE := 50.0
 const BAR_FULL_WIDTH := 150.0
 
+const TOOL_LOCKED_COLOR := Color(0.2, 0.2, 0.2, 0.8)
+const CLOCK_COLOR := Color(0.85, 0.68, 0.25, 1.0)
+const HARVEST_TOOL_COLOR := Color(0.35, 0.65, 0.25, 1.0)
+const HOE_COLOR := Color(0.55, 0.38, 0.2, 1.0)
+const BUCKET_EMPTY_COLOR := Color(0.5, 0.4, 0.25, 1.0)
+const BUCKET_FULL_COLOR := Color(0.25, 0.55, 0.75, 1.0)
+
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
 @onready var mesh: MeshInstance3D = $MeshInstance3D
@@ -34,6 +41,10 @@ const BAR_FULL_WIDTH := 150.0
 @onready var thirst_fill: ColorRect = $Hud/ThirstBarBg/ThirstBarFill
 @onready var message_label: Label = $Hud/MessageLabel
 @onready var seed_label: Label = $Hud/SeedLabel
+@onready var clock_slot: ColorRect = $Hud/ToolsRow/ClockSlot
+@onready var harvest_slot: ColorRect = $Hud/ToolsRow/HarvestSlot
+@onready var hoe_slot: ColorRect = $Hud/ToolsRow/HoeSlot
+@onready var bucket_slot: ColorRect = $Hud/ToolsRow/BucketSlot
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -104,6 +115,7 @@ func _ready() -> void:
 	hud.visible = is_multiplayer_authority()
 	_update_hud()
 	clock_label.visible = has_clock
+	_update_tool_indicators()
 	_rain = _build_rain()
 
 	if is_multiplayer_authority():
@@ -194,6 +206,7 @@ func _dig() -> void:
 		thirst = minf(100.0, thirst + DRINK_THIRST_RESTORE)
 		if has_bucket and not bucket_full:
 			bucket_full = true
+			_update_tool_indicators()
 			_show_message("Seau rempli.")
 		return
 
@@ -248,6 +261,7 @@ func _interact_farm_plot(plot: FarmPlot) -> void:
 				return
 			plot.water.rpc()
 			bucket_full = false
+			_update_tool_indicators()
 		FarmPlot.State.GROWING:
 			_show_message("Ça pousse encore...")
 		FarmPlot.State.READY:
@@ -267,22 +281,26 @@ func _interact_farm_plot(plot: FarmPlot) -> void:
 func unlock_clock() -> void:
 	has_clock = true
 	clock_label.visible = true
+	_update_tool_indicators()
 
 
 # Meme principe que unlock_clock, pour l'outil de recolte (voir la
 # remarque plus haut sur le fait que ca profite a toute l'equipe).
 func unlock_harvest_tool() -> void:
 	has_harvest_tool = true
+	_update_tool_indicators()
 	_show_message("Outil de récolte trouvé !")
 
 
 func unlock_hoe() -> void:
 	has_hoe = true
+	_update_tool_indicators()
 	_show_message("Houe trouvée !")
 
 
 func unlock_bucket() -> void:
 	has_bucket = true
+	_update_tool_indicators()
 	_show_message("Seau trouvé !")
 
 
@@ -317,6 +335,19 @@ func _hit_to_column(hit: Dictionary) -> Vector2i:
 func _update_hud() -> void:
 	block_label.text = "Blocs : %d" % block_count
 	seed_label.text = "Graines : %d" % seed_count
+
+
+# Rangee de cases en bas du HUD, une par outil : grisee tant que non
+# trouve, coloree une fois en poche. Le seau distingue en plus rempli
+# (bleu) / vide (couleur bois) une fois trouve.
+func _update_tool_indicators() -> void:
+	clock_slot.color = CLOCK_COLOR if has_clock else TOOL_LOCKED_COLOR
+	harvest_slot.color = HARVEST_TOOL_COLOR if has_harvest_tool else TOOL_LOCKED_COLOR
+	hoe_slot.color = HOE_COLOR if has_hoe else TOOL_LOCKED_COLOR
+	if not has_bucket:
+		bucket_slot.color = TOOL_LOCKED_COLOR
+	else:
+		bucket_slot.color = BUCKET_FULL_COLOR if bucket_full else BUCKET_EMPTY_COLOR
 
 
 func _format_time(time_of_day: float) -> String:
