@@ -41,6 +41,7 @@ var _layer_buttons: Array[Button] = []
 var _size_buttons: Array[Button] = []
 var _biome_rows: VBoxContainer
 var _play_button: Button
+var _cache_label: Label
 
 
 func _ready() -> void:
@@ -170,6 +171,21 @@ func _build_side_column() -> Control:
 	_biome_rows.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	side.add_child(_biome_rows)
 
+	# Le cache est expose plutot que cache : l'empreinte des reglages change des
+	# qu'on retouche une constante de generation, et le voir a l'ecran evite de
+	# se demander si un monde a bien ete recalcule.
+	var cache_row := HBoxContainer.new()
+	cache_row.add_theme_constant_override("separation", 6)
+	_cache_label = _label("", 11, Color(INK, 0.40))
+	_cache_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cache_row.add_child(_cache_label)
+	var clear_button := _pill("Vider")
+	clear_button.pressed.connect(func():
+		MapCache.clear()
+		_refresh_cache_label())
+	cache_row.add_child(clear_button)
+	side.add_child(cache_row)
+
 	_play_button = Button.new()
 	_play_button.text = "Explorer ce monde"
 	_play_button.custom_minimum_size = Vector2(0, 46)
@@ -280,15 +296,19 @@ func _regenerate() -> void:
 	await get_tree().process_frame
 
 	var started := Time.get_ticks_msec()
-	_map = WorldMap.new(WorldSettings.size, WorldSettings.height)
-	_map.generate(WorldSettings.seed_value)
+	_map = MapCache.load_or_generate(
+		WorldSettings.seed_value, WorldSettings.size, WorldSettings.height)
 	var elapsed := Time.get_ticks_msec() - started
 
 	_select_layer(_layer)
 	_refresh_stats()
-	_status.text = "Monde genere en %d ms" % elapsed
+	# On distingue les deux cas a l'ecran : qui calibre la generation doit
+	# savoir s'il regarde un monde recalcule ou une vieille carte relue.
+	_status.text = ("Monde repris du cache en %d ms" if MapCache.last_was_cached()
+		else "Monde genere en %d ms") % elapsed
 	_play_button.disabled = false
 	_busy = false
+	_refresh_cache_label()
 
 
 func _refresh_image() -> void:
@@ -377,3 +397,8 @@ func _bar(color: Color) -> StyleBoxFlat:
 	style.set_corner_radius_all(2)
 	style.set_content_margin_all(0)
 	return style
+
+
+func _refresh_cache_label() -> void:
+	_cache_label.text = "Cache · %d carte(s) · empreinte %x" % [
+		MapCache.entry_count(), MapCache.parameters_hash() & 0xffffffff]

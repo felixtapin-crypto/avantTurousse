@@ -53,6 +53,17 @@ extends RefCounted
 # humidite). Sans ca, un desert tomberait n'importe ou plutot que la ou il
 # fait chaud et sec.
 
+# Version de l'ALGORITHME, a incrementer des qu'on modifie le code de la
+# generation sans toucher a une constante — reordonner les passes, changer une
+# formule, ajouter une etape.
+#
+# Le cache (voir `map_cache.gd`) calcule son empreinte sur les constantes de ce
+# fichier, par introspection, ce qui couvre tout changement de REGLAGE sans
+# qu'on ait a y penser. Mais l'introspection ne voit pas le corps des
+# fonctions : sans ce compteur, une refonte de l'erosion servirait d'anciennes
+# cartes en silence.
+const GENERATION_VERSION := 1
+
 # --- Geometrie de l'ile ----------------------------------------------------
 const SEA_LEVEL := 30
 
@@ -204,6 +215,7 @@ enum Biome {
 	SNOW,
 }
 
+var seed_used: int = 0
 var size_xz: int
 var size_y: int
 
@@ -363,9 +375,8 @@ func biome_name(biome: int) -> String:
 # par partie, elle devra etre TRANSMISE au client et ne pourra plus etre une
 # constante compilee — voir issue #31.
 func generate(seed_value: int) -> void:
-	_cave_noise.seed = seed_value + 3
-	_cave_noise.frequency = 0.045
-	_cave_noise.fractal_octaves = 2
+	seed_used = seed_value
+	_prepare_cave_noise(seed_value)
 
 	_build_base_relief(seed_value)
 	_apply_hydrology()
@@ -767,3 +778,63 @@ func sub_surface(biome: int) -> Vector2i:
 			return Vector2i(TerrainMaterials.Type.DIRT, DIRT_DEPTH)
 		_:
 			return Vector2i(TerrainMaterials.Type.STONE, 0)
+
+
+# --- Sauvegarde/restauration pour le cache ---------------------------------
+
+func _prepare_cave_noise(seed_value: int) -> void:
+	_cave_noise.seed = seed_value + 3
+	_cave_noise.frequency = 0.045
+	_cave_noise.fractal_octaves = 2
+
+
+# Etat complet de la carte, pour `map_cache.gd`.
+#
+# Tous les champs sont stockes, y compris ceux qui ne servent qu'a l'ecran
+# d'apercu (debit, ombre, continentalite). Les recalculer reviendrait a refaire
+# l'hydrologie, c'est-a-dire l'essentiel du cout qu'on cherche justement a
+# eviter.
+#
+# Le bruit des grottes n'est PAS stocke : il se rededuit de la seed, qui l'est.
+func capture_state() -> Dictionary:
+	return {
+		"seed": seed_used,
+		"size": size_xz,
+		"height": size_y,
+		"heights": _heights,
+		"height_f": _height_f,
+		"continentality": _continentality,
+		"flow": _flow,
+		"temperature": _temperature,
+		"moisture": _moisture,
+		"shadow": _shadow,
+		"biomes": _biomes,
+		"min_height": _min_height,
+		"max_height": _max_height,
+	}
+
+
+# Retourne false si l'etat ne correspond pas a cette carte : l'appelant doit
+# alors regenerer plutot que de partir avec des tableaux de la mauvaise
+# taille, qui planteraient a la premiere lecture.
+func restore_state(data: Dictionary) -> bool:
+	var columns := size_xz * size_xz
+	for key in ["heights", "height_f", "continentality", "flow",
+			"temperature", "moisture", "shadow", "biomes"]:
+		if not data.has(key) or data[key].size() != columns:
+			return false
+
+	seed_used = int(data["seed"])
+	_heights = data["heights"]
+	_height_f = data["height_f"]
+	_continentality = data["continentality"]
+	_flow = data["flow"]
+	_temperature = data["temperature"]
+	_moisture = data["moisture"]
+	_shadow = data["shadow"]
+	_biomes = data["biomes"]
+	_min_height = int(data["min_height"])
+	_max_height = int(data["max_height"])
+
+	_prepare_cave_noise(seed_used)
+	return true

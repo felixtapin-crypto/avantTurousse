@@ -44,6 +44,7 @@ func _initialize() -> void:
 	var failures := 0
 	failures += _check_surface(map)
 	failures += _check_biomes(map)
+	failures += _check_cache()
 
 	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
 	# et manquer sur une autre, et ce n'est pas acceptable — une partie tiree
@@ -278,3 +279,71 @@ func _missing_biomes(map: WorldMap) -> PackedStringArray:
 		if float(int(counts.get(biome, 0))) / float(total) < MIN_BIOME_SHARE:
 			missing.append(map.biome_name(biome))
 	return missing
+
+
+# Une carte relue du cache doit etre RIGOUREUSEMENT identique a celle qu'on
+# vient de calculer. Sinon le cache introduit un bug invisible : l'apercu et
+# la partie montreraient deux mondes differents pour la meme seed, et le
+# desaccord serait mis sur le compte de la generation.
+#
+# On compare aussi la sortie du generateur 3D, ce qui verifie au passage que
+# le bruit des grottes a bien ete rededuit de la seed — il n'est pas stocke.
+func _check_cache() -> int:
+	print("\n--- cache de cartes ---")
+
+	var size := 300
+	var seed_value := 424242
+
+	var first := MapCache.load_or_generate(seed_value, size, 64)
+	var second := MapCache.load_or_generate(seed_value, size, 64)
+
+	if not MapCache.last_was_cached():
+		printerr("  la seconde lecture n'est pas passee par le cache")
+		return 1
+
+	var mismatches := 0
+	for z in size:
+		for x in size:
+			if first.terrain_height(x, z) != second.terrain_height(x, z) \
+					or first.biome_at(x, z) != second.biome_at(x, z) \
+					or not is_equal_approx(first.terrain_height_f(x, z), second.terrain_height_f(x, z)) \
+					or not is_equal_approx(first.temperature_at(x, z), second.temperature_at(x, z)) \
+					or not is_equal_approx(first.moisture_at(x, z), second.moisture_at(x, z)) \
+					or not is_equal_approx(first.flow_at(x, z), second.flow_at(x, z)) \
+					or not is_equal_approx(first.rain_shadow_at(x, z), second.rain_shadow_at(x, z)) \
+					or not is_equal_approx(first.continentality_at(x, z), second.continentality_at(x, z)):
+				mismatches += 1
+
+	var cave_mismatches := 0
+	var generators := [TerrainGenerator.new(), TerrainGenerator.new()]
+	generators[0].map = first
+	generators[1].map = second
+	var centre := size / 2
+	@warning_ignore("integer_division")
+	var cy := first.terrain_height(centre, centre) / CHUNK
+	var buffers := []
+	for generator in generators:
+		var buffer := VoxelBuffer.new()
+		buffer.create(CHUNK, CHUNK, CHUNK)
+		generator._generate_block(buffer, Vector3i(centre, cy * CHUNK, centre), 0)
+		buffers.append(buffer)
+	for y in CHUNK:
+		for z in CHUNK:
+			for x in CHUNK:
+				var a: float = buffers[0].get_voxel_f(x, y, z, VoxelBuffer.CHANNEL_SDF)
+				var b: float = buffers[1].get_voxel_f(x, y, z, VoxelBuffer.CHANNEL_SDF)
+				if not is_equal_approx(a, b):
+					cave_mismatches += 1
+
+	print("  empreinte des reglages : %x" % (MapCache.parameters_hash() & 0xffffffff))
+	print("  colonnes differentes : %d" % mismatches)
+	print("  voxels differents dans un chunk temoin : %d" % cave_mismatches)
+
+	var failures := 0
+	if mismatches > 0:
+		printerr("  la carte relue differe de la carte calculee")
+		failures += 1
+	if cave_mismatches > 0:
+		printerr("  le terrain 3D differe : le bruit des grottes n'a pas ete rededuit")
+		failures += 1
+	return failures
