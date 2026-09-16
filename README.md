@@ -28,11 +28,15 @@ Les deux joueurs devraient apparaître dans le même monde 3D.
 
 ## Jouer à deux, chacun chez soi
 
-Pour l'instant le réseau utilise une connexion directe (un des deux joueurs héberge, l'autre le rejoint par IP), sans serveur dédié. Pour que ça marche entre deux maisons différentes, il faut une des solutions suivantes (pas encore mise en place, à voir ensemble selon ce qui vous convient) :
+Le réseau utilise une connexion directe (un des deux joueurs héberge, l'autre le rejoint par IP), sans serveur dédié. Pour que ça marche entre deux maisons différentes, la solution retenue pour l'instant est un VPN léger :
 
-- **Redirection de port (port forwarding)** : celui qui héberge ouvre le port UDP `7777` sur sa box/routeur vers sa machine, et donne son IP publique à l'autre joueur.
-- **VPN léger type [Tailscale](https://tailscale.com/) ou Radmin VPN** : les deux machines rejoignent le même réseau virtuel, et on se connecte à l'IP donnée par le VPN. Plus simple à mettre en place que le port forwarding, pas besoin de toucher à la box.
-- **Serveur dédié loué** (VPS) : plus tard, si le jeu grandit au-delà de 2 joueurs ou si vous voulez une partie toujours disponible.
+**[Tailscale](https://tailscale.com/download)** — chaque joueur l'installe et se connecte avec le même compte (ou s'invite mutuellement dans le même "tailnet" via [l'admin console](https://tailscale.com/admin)). Une fois connecté, `tailscale status` donne une IP `100.x.x.x` par machine. L'hôte clique **Héberger une partie**, l'autre saisit l'IP Tailscale de l'hôte dans le champ adresse et clique **Rejoindre une partie**. Aucune configuration de routeur, et ça évite les soucis de CGNAT (fréquent chez les FAI) qui bloquent souvent la redirection de port classique.
+
+Alternatives pour plus tard si besoin : redirection de port manuelle (ouvrir le port UDP `7777` sur la box de l'hôte), ou un serveur dédié loué (VPS) si le jeu grandit au-delà de 2 joueurs.
+
+## Chat vocal
+
+Pas de chat vocal intégré au jeu pour l'instant — utilisez un appel Discord (ou équivalent) en parallèle. Un vrai chat vocal en jeu est noté comme tâche future dans `TASKS.md` si on veut le construire proprement plus tard.
 
 ## Structure du projet
 

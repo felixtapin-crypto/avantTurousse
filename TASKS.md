@@ -46,6 +46,11 @@ tâches plus petites au fur et à mesure :
 - [ ] Système de gabarits d'énigmes + chaîne d'indices (version fixe d'abord)
 - [ ] Génération de la chaîne de quête + repères nommés
 - [ ] Œuf : éclosion, élevage, condition de victoire
+- [ ] Chat vocal intégré (capture micro, envoi réseau, lecture chez l'autre
+  joueur) — pas urgent, on utilise Discord en attendant pour les tests.
+  Prévoir : format de compression (Opus si dispo), canal réseau dédié
+  (probablement non-fiable/unreliable vu le volume de données), et un
+  indicateur visuel de qui parle.
 - [ ] Sauvegarde / chargement
 - [ ] Répondre aux "Questions ouvertes" de `DESIGN.md`
 
