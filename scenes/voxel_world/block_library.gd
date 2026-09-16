@@ -27,6 +27,7 @@ enum Type {
 	STONE,
 	STONE_DARK,
 	SAND,
+	SAND_PALE,
 	GRAVEL,
 	SNOW,
 	WATER,
@@ -39,7 +40,12 @@ const UV: Dictionary = {
 	Type.DIRT: Vector2(0.6703, 0.2244),       # #9B5A45
 	Type.STONE: Vector2(0.3435, 0.2154),      # #5D6468
 	Type.STONE_DARK: Vector2(0.4101, 0.2344), # #3C4246
+	# Deux sables, pris a deux hauteurs du meme degrade de la palette : le
+	# sable de plage est fonce (mouille), celui du desert est pale (sec). Sans
+	# cette distinction, une plage et une dune seraient exactement le meme
+	# aplat, et la carte perdrait la lecture de ses biomes.
 	Type.SAND: Vector2(0.9203, 0.2201),       # #CE9965
+	Type.SAND_PALE: Vector2(0.9203, 0.0600),  # #E3BE8E
 	Type.GRAVEL: Vector2(0.2953, 0.2244),     # #596064
 	Type.SNOW: Vector2(0.1399, 0.1037),       # #DCE1E4
 	Type.WATER: Vector2(0.1072, 0.8022),      # #28A1DA

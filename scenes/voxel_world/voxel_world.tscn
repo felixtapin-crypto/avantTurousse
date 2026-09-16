@@ -33,7 +33,7 @@ environment = SubResource("Environment_1")
 
 [node name="VoxelTerrain" type="Node3D" parent="."]
 script = ExtResource("VoxelTerrainScript")
-size_xz = 300
+size_xz = 600
 size_y = 64
 chunks_per_frame = 6
 

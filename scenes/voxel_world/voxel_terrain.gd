@@ -16,7 +16,7 @@ extends Node3D
 signal generation_progress(done: int, total: int)
 signal generation_finished()
 
-@export var size_xz: int = 300
+@export var size_xz: int = 600
 @export var size_y: int = 64
 # Le maillage initial est etale sur plusieurs frames : mailler un millier de
 # chunks d'un bloc figerait la fenetre plusieurs secondes sans rien afficher.

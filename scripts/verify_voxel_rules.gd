@@ -4,27 +4,40 @@ extends SceneTree
 #
 #   godot --headless --path . --script res://scripts/verify_voxel_rules.gd
 #
-# Trois controles, chacun motive par un bug reel ou une regle demandee :
+# Quatre controles, chacun motive par un bug reel ou une regle demandee :
 #
 # 1. ENROULEMENT DES FACES. Le sens des triangles a deja casse ce projet
 #    deux fois sur platform.gd (terrain invisible vu d'en haut, puis terrain
 #    traversable). Le symptome arrive tard, en jeu, et ressemble a tout sauf
-#    a sa cause. On demande donc directement a Godot, via SurfaceTool,
-#    quelle normale il deduit de notre enroulement.
+#    a sa cause. On demande donc directement a Godot quelle normale il deduit
+#    de notre enroulement.
 #
 # 2. PAS D'EAU ENTERREE. Regle demandee : on ne doit jamais tomber sur une
-#    tuile d'eau en creusant dans l'ile. C'est garanti par construction (l'eau
-#    n'est posee qu'au-dessus du sol), mais c'est exactement le genre
-#    d'invariant qu'un futur ajout de grottes ou de rivieres casse sans
-#    prevenir.
+#    tuile d'eau en creusant. C'est garanti par construction, mais c'est
+#    exactement le genre d'invariant qu'un futur ajout de grottes ou de
+#    rivieres casse sans prevenir — et justement, les rivieres viennent
+#    d'arriver.
 #
-# 3. COUT DE GENERATION, pour que la taille de carte reste un choix informe.
+# 3. REPARTITION DES BIOMES. Un biome peut exister dans le code et ne jamais
+#    sortir a la generation parce qu'un seuil est mal calibre. On compte donc
+#    les colonnes, et on echoue si une plage ou un desert est absent.
+#
+# 4. COUT DE GENERATION, pour que la taille de carte reste un choix informe.
+
+const INVARIANT_SIZE := 300
 
 func _initialize() -> void:
 	var failures := 0
 	failures += _check_analytic()
 	failures += _check_against_godot()
-	failures += _check_water_placement()
+
+	var data := VoxelData.new(INVARIANT_SIZE, 64)
+	var t0 := Time.get_ticks_msec()
+	data.generate(7)
+	print("\n(carte de controle %d generee en %d ms)" % [INVARIANT_SIZE, Time.get_ticks_msec() - t0])
+
+	failures += _check_water_placement(data)
+	failures += _check_biomes(data)
 	_benchmark()
 
 	if failures == 0:
@@ -43,7 +56,6 @@ func _check_analytic() -> int:
 	for f in 6:
 		var expected := Vector3(VoxelMesher.FACE_NORMALS[f])
 		var c: Array = VoxelMesher.FACE_CORNERS[f]
-		# Les deux triangles du quad doivent donner la meme normale.
 		var t1: Vector3 = (c[2] - c[0]).cross(c[1] - c[0]).normalized()
 		var t2: Vector3 = (c[3] - c[0]).cross(c[2] - c[0]).normalized()
 		var ok: bool = t1.is_equal_approx(expected) and t2.is_equal_approx(expected)
@@ -54,8 +66,7 @@ func _check_analytic() -> int:
 
 
 # Le test qui compte vraiment : on laisse Godot deduire lui-meme les normales
-# de notre enroulement, plutot que de se fier a notre lecture de sa
-# convention.
+# de notre enroulement, plutot que de se fier a notre lecture de sa convention.
 func _check_against_godot() -> int:
 	print("\n--- normales deduites par Godot (SurfaceTool.generate_normals) ---")
 	var failures := 0
@@ -82,17 +93,16 @@ func _check_against_godot() -> int:
 	return failures
 
 
-# L'eau doit se trouver exclusivement AU-DESSUS du sol et AU PLUS au niveau
-# de la mer. Toute tuile d'eau a l'interieur du terrain serait une tuile
-# qu'on finirait par deterrer en creusant.
-func _check_water_placement() -> int:
+# L'eau doit se trouver exclusivement AU-DESSUS du sol de sa propre colonne.
+# Une riviere est donc legitime au-dessus du niveau de la mer ; une tuile
+# d'eau au niveau du sol ou en dessous ne l'est jamais, c'est une tuile qu'on
+# finirait par deterrer en creusant.
+func _check_water_placement(data: VoxelData) -> int:
 	print("\n--- placement de l'eau ---")
-	var data := VoxelData.new(160, 64)
-	data.generate(7)
 
 	var buried := 0
-	var above_sea := 0
-	var water_total := 0
+	var sea := 0
+	var river := 0
 	var first_bad := Vector3i(-1, -1, -1)
 
 	for z in data.size_xz:
@@ -101,34 +111,105 @@ func _check_water_placement() -> int:
 			for y in data.size_y:
 				if data.get_voxel(x, y, z) != BlockLibrary.Type.WATER:
 					continue
-				water_total += 1
 				if y <= ground:
 					buried += 1
 					if first_bad.x < 0:
 						first_bad = Vector3i(x, y, z)
-				if y > VoxelData.SEA_LEVEL:
-					above_sea += 1
+				elif y > VoxelData.SEA_LEVEL:
+					river += 1
+				else:
+					sea += 1
 
-	print("  %d voxels d'eau au total" % water_total)
-	print("  enterres sous le sol : %d %s" % [buried, "" if buried == 0 else "(premier: %v)" % first_bad])
-	print("  au-dessus du niveau de la mer : %d" % above_sea)
+	print("  mer : %d voxels" % sea)
+	print("  riviere (au-dessus du niveau de la mer) : %d voxels" % river)
+	print("  ENTERREE : %d %s" % [buried, "" if buried == 0 else "(premier: %v)" % first_bad])
 
 	var failures := 0
-	if water_total == 0:
-		printerr("  AUCUNE eau generee — l'ile n'est pas entouree de mer")
+	if sea == 0:
+		printerr("  aucune mer generee")
 		failures += 1
 	if buried > 0:
 		printerr("  de l'eau est enterree : on en trouvera en creusant")
 		failures += 1
-	if above_sea > 0:
-		printerr("  de l'eau flotte au-dessus du niveau de la mer")
-		failures += 1
 	return failures
+
+
+# Un biome present dans le code mais absent de la carte est un seuil mal
+# calibre, pas une fonctionnalite.
+func _check_biomes(data: VoxelData) -> int:
+	print("\n--- repartition des biomes ---")
+	var counts := {}
+	var total := data.size_xz * data.size_xz
+	for z in data.size_xz:
+		for x in data.size_xz:
+			var b := data.biome_at(x, z)
+			counts[b] = int(counts.get(b, 0)) + 1
+
+	var ordered := counts.keys()
+	ordered.sort_custom(func(a, b): return counts[a] > counts[b])
+	for b in ordered:
+		print("  %-14s %7d colonnes  (%5.2f %%)" % [
+			data.biome_name(b), counts[b], 100.0 * float(counts[b]) / float(total)])
+
+	_report_climate(data)
+
+	var failures := 0
+	for required in [VoxelData.Biome.BEACH, VoxelData.Biome.DESERT, VoxelData.Biome.SNOW, VoxelData.Biome.RIVER]:
+		if int(counts.get(required, 0)) == 0:
+			printerr("  biome absent de la carte : %s" % data.biome_name(required))
+			failures += 1
+	return failures
+
+
+# Un biome absent se diagnostique sur les champs climatiques, pas en relisant
+# la table des seuils : on regarde si la condition est atteignable du tout, et
+# laquelle des deux moities bloque.
+func _report_climate(data: VoxelData) -> void:
+	var t_min := INF
+	var t_max := -INF
+	var m_min := INF
+	var m_max := -INF
+	var land := 0
+	var hot := 0
+	var dry := 0
+	var hot_and_dry := 0
+
+	for z in data.size_xz:
+		for x in data.size_xz:
+			if data.terrain_height(x, z) <= VoxelData.SEA_LEVEL:
+				continue
+			land += 1
+			var t := data.temperature_at(x, z)
+			var m := data.moisture_at(x, z)
+			t_min = minf(t_min, t)
+			t_max = maxf(t_max, t)
+			m_min = minf(m_min, m)
+			m_max = maxf(m_max, m)
+			var is_hot := t > VoxelData.TEMP_DESERT
+			var is_dry := m < VoxelData.MOIST_DESERT
+			if is_hot:
+				hot += 1
+			if is_dry:
+				dry += 1
+			if is_hot and is_dry:
+				hot_and_dry += 1
+
+	if land == 0:
+		print("\n  (aucune terre emergee)")
+		return
+
+	print("\n  climat sur %d colonnes emergees :" % land)
+	print("    temperature %.2f .. %.2f  (seuil desert > %.2f)" % [t_min, t_max, VoxelData.TEMP_DESERT])
+	print("    humidite    %.2f .. %.2f  (seuil desert < %.2f)" % [m_min, m_max, VoxelData.MOIST_DESERT])
+	print("    assez chaud : %d (%.1f %%) · assez sec : %d (%.1f %%) · les deux : %d (%.1f %%)" % [
+		hot, 100.0 * float(hot) / float(land),
+		dry, 100.0 * float(dry) / float(land),
+		hot_and_dry, 100.0 * float(hot_and_dry) / float(land)])
 
 
 func _benchmark() -> void:
 	print("\n--- cout de generation et de maillage ---")
-	for size in [160, 240, 300]:
+	for size in [300, 600]:
 		var data := VoxelData.new(size, 64)
 
 		var t0 := Time.get_ticks_msec()
@@ -147,5 +228,5 @@ func _benchmark() -> void:
 				water_verts += meshes["water"].surface_get_array_len(0)
 		var mesh_ms := Time.get_ticks_msec() - t1
 
-		print("  %dx64x%d : generation %d ms, maillage %d ms (%d chunks, ~%d tris solides + ~%d tris d'eau)"
+		print("  %d x64x %d : generation %d ms, maillage %d ms (%d chunks, ~%d tris solides + ~%d tris d'eau)"
 			% [size, size, gen_ms, mesh_ms, keys.size(), solid_verts / 4 * 2, water_verts / 4 * 2])

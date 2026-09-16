@@ -74,8 +74,18 @@ func _process(delta: float) -> void:
 		_message_timer -= delta
 		status_label.text = _message
 		return
-	status_label.text = "Seed %d · %d FPS · %s" % [
+	# Le biome sous les pieds est affiche pour pouvoir verifier a l'oeil que
+	# la carte est coherente : une plage doit annoncer "plage", un desert
+	# doit se trouver au chaud et au sec, pas au bord de l'eau.
+	var biome := "?"
+	if terrain.data != null:
+		var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
+		biome = terrain.data.biome_name(terrain.data.biome_at(cell.x, cell.z))
+
+	status_label.text = "Seed %d · %d FPS · %s · %s · alt %d" % [
 		world_seed,
 		Engine.get_frames_per_second(),
 		"vol" if player.flying else "marche",
+		biome,
+		int(player.position.y),
 	]
