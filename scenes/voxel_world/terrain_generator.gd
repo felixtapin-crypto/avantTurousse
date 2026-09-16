@@ -56,6 +56,16 @@ const LAYER_COUNT := 8
 # sommets enneiges en roche.
 const SURFACE_SKIN := 2
 
+# Portee de la distance signee, en voxels : au-dela elle sature (voir la
+# division par 8 dans `_generate_block`). C est ce qui borne la bande a
+# calculer voxel par voxel.
+const SDF_RANGE := 8
+
+# Epaisseur de sous-sol la plus grande de tous les biomes (voir
+# WorldMap.sub_surface). Majoree : elle ne sert qu a garder une marge sous la
+# surface avant de declarer un bloc entierement rocheux.
+const MAX_SUB_DEPTH := 8
+
 # Noyau du melange de surface, par triplets (dx, dz, poids) en metres.
 #
 # Il est en ANNEAUX et non en carre plein, et c'est le resultat de deux
@@ -154,8 +164,17 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 	# comparaison. Le reseau, lui, descend jusqu'au plancher du monde : sans ce
 	# test par pave, plus AUCUN bloc souterrain ne sortait par ce raccourci, et
 	# la generation passait de cinq millisecondes a plusieurs secondes.
-	if block_top < heights.x and not map.caves_touch(
-			origin_in_voxels, Vector3i(bs.x * step, bs.y * step, bs.z * step)):
+	var extent := Vector3i(bs.x * step, bs.y * step, bs.z * step)
+	var deep := block_top < heights.x
+	if not deep and block_top + SDF_RANGE + MAX_SUB_DEPTH < _lowest_top(
+			origin_in_voxels, bs, step):
+		# Le minimum GLOBAL des altitudes ne sert presque jamais : il suffit
+		# d'une seule fosse marine pour qu'aucun bloc du continent n'y passe.
+		# Le minimum LOCAL coute 256 lectures de carte et ecarte la moitie des
+		# blocs d'un monde de 64 de haut — ceux-la meme dont la file d'attente
+		# fait patienter a la fermeture de la partie.
+		deep = true
+	if deep and not map.caves_touch(origin_in_voxels, extent):
 		buffer.fill_f(-1.0, SDF_CHANNEL)
 		_fill_material(buffer, Layer.STONE)
 		return
@@ -171,14 +190,54 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 			var strata := map.sub_surface(biome)
 			var sub_layer := layer_for(strata.x)
 			var sub_depth: int = strata.y
-			# Calcule une fois par COLONNE : le melange ne depend que de x et z.
-			var surface_mix := _surface_mix(wx, wz)
+			# Le melange de surface n est calcule que si la surface TRAVERSE ce
+			# bloc.
+			#
+			# Il coute trente-trois lectures de carte par colonne, et il n est lu
+			# que dans la peau de surface. Un monde de 64 de haut compte quatre
+			# etages de chunks : trois sur quatre n en voient jamais la couleur, et
+			# le calculaient quand meme. C est l essentiel du temps de generation
+			# d un bloc souterrain — temps qu on paie une seconde fois en quittant
+			# la partie, puisque liberer le terrain attend que la file de
+			# generation se vide et que rien ne permet de l annuler depuis GDScript.
+			var surface_mix := _single_material[Layer.STONE]
+			if top >= oy - SURFACE_SKIN and top <= block_top + SURFACE_SKIN:
+				surface_mix = _surface_mix(wx, wz)
 			# De meme pour les grottes : la recherche des capsules proches est un
 			# acces de dictionnaire, hors de prix repete par voxel.
 			var cave_capsules := map.cave_column(wx, wz)
 			var cave_band := map.cave_y_bounds(cave_capsules)
 
-			for y in bs.y:
+			# Bande a calculer VOXEL PAR VOXEL.
+			#
+			# Au-dela, plus rien ne varie : la distance signee sature a ±1 des
+			# huit voxels (c'est la division par 8 plus bas), et la matiere ne
+			# change plus non plus — au-dessus c'est la peau de surface, en
+			# dessous c'est la roche. Le reste de la colonne se remplit donc d'un
+			# bloc, en deux appels au lieu de soixante tours de boucle.
+			#
+			# C'est la mesure qui a impose ce decoupage : liberer le terrain en
+			# quittant la partie attend que la file de generation se vide, et
+			# rien ne permet de l'annuler depuis GDScript. Tout ce qu'on
+			# n'economise pas ici se paie une seconde fois a la sortie.
+			var floor_reach := maxi(SDF_RANGE, sub_depth + 1)
+			var band_low := mini(floori(ground), top) - floor_reach
+			var band_high := maxi(ceili(ground), top) + SDF_RANGE
+			if not cave_capsules.is_empty():
+				band_low = mini(band_low, cave_band.x - 1)
+				band_high = maxi(band_high, cave_band.y + 1)
+
+			var y_lo := clampi(ceili(float(band_low - oy) / float(step)), 0, bs.y)
+			var y_hi := clampi(floori(float(band_high - oy) / float(step)), -1, bs.y - 1)
+
+			if y_lo > 0:
+				_fill_solid_below(buffer, x, z, y_lo, oy, step)
+			if y_hi < bs.y - 1:
+				buffer.fill_area_f(1.0,
+					Vector3i(x, y_hi + 1, z), Vector3i(x + 1, bs.y, z + 1), SDF_CHANNEL)
+				_fill_material_range(buffer, x, z, y_hi + 1, bs.y, surface_mix)
+
+			for y in range(y_lo, y_hi + 1):
 				var wy := oy + y * step
 				var depth := top - wy
 
@@ -250,6 +309,32 @@ func _pad_to_four(kept: PackedInt32Array) -> PackedInt32Array:
 		if not kept.has(layer):
 			kept.append(layer)
 	return kept
+
+
+# Remplit d'un bloc la portion de colonne SOUS la bande calculee : matiere
+# pleine, roche, et bedrock tout en bas.
+#
+# La stratification n'y entre pas : `floor_reach` garantit que la bande descend
+# plus bas que l'epaisseur de sous-sol du biome, donc ce qui reste dessous est
+# necessairement de la roche.
+func _fill_solid_below(buffer: VoxelBuffer, x: int, z: int, y_lo: int,
+		oy: int, step: int) -> void:
+	buffer.fill_area_f(-1.0, Vector3i(x, 0, z), Vector3i(x + 1, y_lo, z + 1), SDF_CHANNEL)
+
+	var bedrock := clampi(
+		ceili(float(WorldMap.BEDROCK_DEPTH - oy) / float(step)), 0, y_lo)
+	if bedrock > 0:
+		_fill_material_range(buffer, x, z, 0, bedrock, _single_material[Layer.STONE_DARK])
+	if y_lo > bedrock:
+		_fill_material_range(buffer, x, z, bedrock, y_lo, _single_material[Layer.STONE])
+
+
+func _fill_material_range(buffer: VoxelBuffer, x: int, z: int, y0: int, y1: int,
+		mix: Vector2i) -> void:
+	var from := Vector3i(x, y0, z)
+	var to := Vector3i(x + 1, y1, z + 1)
+	buffer.fill_area(mix.x, from, to, INDICES_CHANNEL)
+	buffer.fill_area(mix.y, from, to, WEIGHTS_CHANNEL)
 
 
 func _set_material_mix(buffer: VoxelBuffer, x: int, y: int, z: int, mix: Vector2i) -> void:
@@ -349,3 +434,16 @@ func layer_for(block_type: int) -> int:
 		TerrainMaterials.Type.GRAVEL: return Layer.GRAVEL
 		TerrainMaterials.Type.SNOW: return Layer.SNOW
 		_: return Layer.STONE
+
+
+# Altitude de surface la plus BASSE parmi les colonnes de ce bloc.
+#
+# 256 lectures de carte, contre les 4096 voxels qu'elles evitent de parcourir
+# quand le bloc se revele entierement souterrain.
+func _lowest_top(origin: Vector3i, bs: Vector3i, step: int) -> int:
+	var lowest := 1 << 30
+	for z in bs.z:
+		var wz := origin.z + z * step
+		for x in bs.x:
+			lowest = mini(lowest, map.terrain_height(origin.x + x * step, wz))
+	return lowest

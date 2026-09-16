@@ -19,7 +19,19 @@ extends Node3D
 @export var world_seed: int = 1
 @export var map_size: int = 600
 @export var map_height: int = 64
-@export var view_distance: int = 384
+# Distance de vue, en metres.
+#
+# Ramenee de 384 a 256, et c'est un choix mesure plutot qu'un reglage de
+# confort. Le nombre de blocs a generer croit avec le CARRE de cette valeur :
+# 256 en demande 44 % de ce que demandait 384. Or notre generateur est en
+# GDScript, il tient environ cinq millisecondes par bloc, et sa file d'attente
+# ne s'annule pas — quitter la partie attend qu'elle se vide, ce qui prenait
+# jusqu'a deux minutes.
+#
+# Ce qu'on perd se voit a peine : a la densite de brouillard reglee dans
+# SkyCycle, il ne reste que 54 % de visibilite a 384 m. Le lointain est deja
+# peint par la perspective aerienne, pas par la geometrie.
+@export var view_distance: int = 256
 
 const MESSAGE_DURATION := 2.5
 
@@ -182,9 +194,27 @@ func _unhandled_input(event: InputEvent) -> void:
 	match (event as InputEventKey).keycode:
 		KEY_M:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+			await _announce_exit("Retour a la carte...")
 			get_tree().change_scene_to_file("res://scenes/voxel_world/map_preview.tscn")
 		KEY_F10:
+			await _announce_exit("Fermeture...")
 			get_tree().quit()
+
+
+# Demonter le terrain fige la fenetre plusieurs secondes : liberer un
+# VoxelTerrain attend que sa file de generation se vide, et rien ne permet de
+# l'annuler depuis GDScript. On l'a ramenee de deux minutes a une dizaine de
+# secondes (voir `scripts/probe_teardown.gd`), mais elle ne disparaitra pas
+# tant que la generation restera en GDScript.
+#
+# Le message est donc affiche AVANT, avec une image pour qu'il soit peint : un
+# gel annonce se supporte, un gel muet passe pour un plantage.
+func _announce_exit(message: String) -> void:
+	set_process(false)
+	status_label.text = message
+	help_label.text = "Le terrain se demonte — quelques secondes."
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 
 func _on_edit_refused(reason: String) -> void:
