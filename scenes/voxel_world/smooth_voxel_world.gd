@@ -38,9 +38,15 @@ func _ready() -> void:
 	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris"
 	status_label.text = "Calcul de la carte..."
 
+	# Reglages venus de l'ecran d'apercu, si la partie est passee par lui.
+	world_seed = WorldSettings.seed_value
+	map_size = WorldSettings.size
+
 	var started := Time.get_ticks_msec()
-	map = WorldMap.new(map_size, map_height)
-	map.generate(world_seed)
+	map = WorldSettings.take_map()
+	if map == null:
+		map = WorldMap.new(map_size, map_height)
+		map.generate(world_seed)
 	var map_ms := Time.get_ticks_msec() - started
 
 	var generator := KayKitSmoothGenerator.new()

@@ -55,8 +55,24 @@ extends RefCounted
 
 # --- Geometrie de l'ile ----------------------------------------------------
 const SEA_LEVEL := 30
-const EDGE_RATIO := 0.62          # fraction de size/2 ou commence le rivage
-const SHORE_WIDTH := 34.0         # largeur de la transition ile -> fond marin
+const EDGE_RATIO := 0.62          # fraction du rayon ou l'ocean reprend la main
+
+# Forme du continent. La frequence fixe la taille des golfes et des
+# peninsules : plus elle est basse, plus les decoupes sont amples. Le seuil
+# decide de la proportion de terres — le monter noie le continent, le
+# descendre le fait deborder jusqu'aux bords de la carte.
+const CONTINENT_FREQUENCY := 0.0035
+const CONTINENT_OCTAVES := 4
+const COAST_THRESHOLD := 0.40
+# Largeur du degrade au littoral, et courbure de la montee vers les terres.
+#
+# Les deux fabriquent les plages, et le passage au masque continental les a
+# fait disparaitre : de 2 614 colonnes de plage a 129, parce qu'un masque
+# seuille monte bien plus vite qu'un rayon interpole. L'exposant maintient la
+# cote basse plus longtemps, ce qui etale un plateau littoral au lieu d'une
+# falaise plantee dans l'eau.
+const COAST_BLEND := 0.15
+const COAST_CURVE := 1.9
 
 # Le relief doit avoir assez d'ampleur pour que les sommets soient
 # reellement froids : c'est l'altitude qui fabrique la neige, pas un seuil
@@ -99,7 +115,14 @@ const RIVER_FRACTION := 0.008
 # continentalite/altitude, les deux reglages s'excluaient.
 const TEMP_BASE := 0.70
 const TEMP_LAPSE := 0.024         # refroidissement par voxel au-dessus de la mer
-const TEMP_LATITUDE := 0.34       # gradient nord-sud sur toute la carte
+const TEMP_LATITUDE := 0.34       # amplitude du gradient nord-sud
+# Position de l'equateur, en fraction de la carte sur l'axe Z. A 1.0 il tombe
+# exactement sur le bord sud, ce qui redonne un gradient monotone du froid au
+# chaud — le comportement d'origine, a l'identique. Le ramener vers 0.5 place
+# une vraie bande equatoriale au milieu de la carte, avec deux moities
+# froides ; c'est plus juste physiquement mais ca reduit l'ecart climatique
+# traverse par un continent centre, donc a recalibrer si on le change.
+const TEMP_EQUATOR := 1.0
 const TEMP_NOISE := 0.12
 
 const MOIST_BASE := 0.30
@@ -271,6 +294,31 @@ func moisture_at(x: int, z: int) -> float:
 	return _moisture[z * size_xz + x]
 
 
+func continentality_at(x: int, z: int) -> float:
+	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
+		return 0.0
+	return _continentality[z * size_xz + x]
+
+
+func rain_shadow_at(x: int, z: int) -> float:
+	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
+		return 0.0
+	return _shadow[z * size_xz + x]
+
+
+func flow_at(x: int, z: int) -> float:
+	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
+		return 0.0
+	return _flow[z * size_xz + x]
+
+
+# Contribution de la latitude a la temperature, isolee du reste. Purement
+# pour l'affichage : elle permet de voir ou passe l'equateur du monde, que
+# l'altitude et le bruit masquent sur la carte de temperature.
+func latitude_temperature(z: int) -> float:
+	return TEMP_LATITUDE * (0.5 - absf(float(z) / float(size_xz) - TEMP_EQUATOR))
+
+
 func biome_at(x: int, z: int) -> int:
 	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
 		return Biome.DEEP_SEA
@@ -346,39 +394,60 @@ func _build_base_relief(seed_value: int) -> void:
 	height_noise.frequency = 0.0075
 	height_noise.fractal_octaves = 5
 
-	var edge_noise := FastNoiseLite.new()
-	edge_noise.seed = seed_value + 1
+	# Masque continental : un bruit fractal 2D basse frequence, SEUILLE, et
+	# non une ondulation du rayon selon l'angle.
+	#
+	# C'est la difference entre une ile et un continent. Faire varier le rayon
+	# avec l'angle ne peut produire qu'un disque bossele : chaque direction
+	# n'a qu'une seule cote, donc jamais de golfe profond, de peninsule ni de
+	# presqu'ile tenue par un isthme. Un masque 2D seuille, lui, decoupe un
+	# littoral quelconque.
+	var shape_noise := FastNoiseLite.new()
+	shape_noise.seed = seed_value + 1
+	shape_noise.frequency = CONTINENT_FREQUENCY
+	shape_noise.fractal_octaves = CONTINENT_OCTAVES
 
 	var seabed_noise := FastNoiseLite.new()
 	seabed_noise.seed = seed_value + 2
 	seabed_noise.frequency = 0.01
 
 	var center := float(size_xz) / 2.0
-	var base_radius := center * EDGE_RATIO
 
 	for z in size_xz:
 		for x in size_xz:
 			var dx := float(x) - center
 			var dz := float(z) - center
-			var dist := sqrt(dx * dx + dz * dz)
-			var angle := atan2(dz, dx)
-			var local_radius := base_radius + edge_noise.get_noise_1d(angle * 12.0) * center * 0.15
+			var dist := sqrt(dx * dx + dz * dz) / center
 
-			var offshore := clampf((dist - local_radius) / SEABED_FALLOFF_RANGE, 0.0, 1.0)
+			# Attenuation radiale : elle garantit que le continent est
+			# ENTIEREMENT entoure d'eau quoi que raconte le bruit. Sans elle,
+			# le masque atteindrait les bords de la carte et le littoral y
+			# serait coupe net.
+			var radial := 1.0 - smoothstep(EDGE_RATIO - 0.28, EDGE_RATIO + 0.12, dist)
+			var shape := 0.5 + 0.5 * shape_noise.get_noise_2d(float(x), float(z))
+			var mask := shape * radial
+
+			# 0 en pleine mer, 1 franchement a terre.
+			var landness := smoothstep(
+				COAST_THRESHOLD - COAST_BLEND, COAST_THRESHOLD + COAST_BLEND, mask)
+
+			var offshore := clampf((COAST_THRESHOLD - mask) / COAST_THRESHOLD, 0.0, 1.0)
 			var seabed := SEABED_BASE \
 				+ seabed_noise.get_noise_2d(float(x), float(z)) * SEABED_AMPLITUDE \
 				- offshore * SEABED_FALLOFF
 
 			var land := SURFACE_BASE + height_noise.get_noise_2d(float(x), float(z)) * SURFACE_AMPLITUDE
 
-			var shore_blend := smoothstep(0.0, SHORE_WIDTH, local_radius - dist)
 			var index := z * size_xz + x
-			_height_f[index] = lerpf(seabed, land, shore_blend)
+			_height_f[index] = lerpf(seabed, land, pow(landness, COAST_CURVE))
 
-			# Continentalite : 0 sur le rivage, 1 au coeur des terres, sur une
-			# echelle bien plus large que la plage. C'est elle qui rendra
-			# l'interieur sec (donc desertique) et les cotes humides.
-			_continentality[index] = clampf((local_radius - dist) / (local_radius * 0.75), 0.0, 1.0)
+			# Continentalite : 0 sur le rivage, 1 au coeur des terres. Tiree du
+			# masque et non de la distance au centre : avec un littoral
+			# decoupe, le rayon ne mesure plus du tout la "profondeur dans les
+			# terres" — le fond d'un golfe est proche du centre tout en etant
+			# au bord de l'eau.
+			_continentality[index] = clampf(
+				(mask - COAST_THRESHOLD) / (1.0 - COAST_THRESHOLD), 0.0, 1.0)
 
 
 # Etape 2 : hydrologie.
@@ -549,7 +618,7 @@ func _classify(seed_value: int) -> void:
 			var altitude := float(height - SEA_LEVEL)
 			var temp := TEMP_BASE \
 				- maxf(altitude, 0.0) * TEMP_LAPSE \
-				+ (float(z) / float(size_xz) - 0.5) * TEMP_LATITUDE \
+				+ latitude_temperature(z) \
 				+ temp_noise.get_noise_2d(float(x), float(z)) * TEMP_NOISE
 			temp = clampf(temp, 0.0, 1.0)
 

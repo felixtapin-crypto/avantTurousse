@@ -21,10 +21,9 @@ extends SceneTree
 # 3. COUT DE GENERATION, pour que la taille de carte reste un choix informe.
 
 # Taille de la carte de controle. A ne pas trop reduire pour gagner du temps :
-# SHORE_WIDTH est une largeur ABSOLUE alors que le rayon de l'ile suit la
-# taille de carte, donc sous ~280 la bande de rivage mange presque toute
-# l'ile, le relief reste plat, et des biomes d'altitude comme la neige
-# disparaissent — un faux echec qui n'a rien a voir avec le code teste.
+# la frequence du masque continental est absolue, donc une petite carte ne
+# contient qu'un fragment de continent, souvent sans relief marque ni biome
+# d'altitude — un faux echec qui n'a rien a voir avec le code teste.
 const INVARIANT_SIZE := 300
 const CHUNK := 16
 # Un chunk sur deux en x et z : assez pour couvrir toute la carte sans
