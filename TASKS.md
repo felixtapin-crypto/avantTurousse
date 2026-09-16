@@ -36,9 +36,9 @@ _(vide pour l'instant — ajoutez une ligne quand vous démarrez quelque chose)_
 Repris de la feuille de route dans `DESIGN.md` — à affiner/découper en
 tâches plus petites au fur et à mesure :
 
-- [ ] Prototype voxel de base (terrain fixe, marche/saut, caméra 3e personne)
+- [ ] Caméra 3e personne (le contrôleur actuel est encore en vue FPS)
 - [ ] Casser/poser des voxels + inventaire minimal
-- [ ] Génération procédurale de la plateforme (seed → terrain + biomes)
+- [ ] Biomes sur la plateforme générée (forêt, rocher, point d'eau...)
 - [ ] Jauges de survie (faim/soif) + cycle jour/nuit + température
 - [ ] Artisanat de base (outils) + briquet + feu + tronc à brûler
 - [ ] Construction d'abri (pose de blocs)
@@ -56,3 +56,8 @@ tâches plus petites au fur et à mesure :
   section "Ce qui change par rapport au prototype existant").
 - 2026-09-16 — Rédaction de `DESIGN.md` (concept, boucle de jeu, système de
   génération des énigmes, feuille de route).
+- 2026-09-16 — Première génération procédurale de la plateforme
+  (`scenes/world/platform.gd`) : heightmap 300×300 m, contour irrégulier,
+  chute mortelle en dehors du bord. Remplace le sol plat du prototype
+  initial. Reste en heightmap (pas encore une vraie grille de voxels) —
+  à revoir à l'étape "Interaction".

@@ -69,6 +69,20 @@ dressage").
   deux doivent être des voxels retirables au même titre.
 - Taille : suffisamment grande pour justifier 1h+ d'exploration, mais bornée
   (pas de génération infinie type Minecraft — c'est une île/plateforme finie).
+  **Décision technique** : 1 km × 1 km (proposé au départ) est trop grand
+  pour un premier prototype sans système de chunks (streaming du terrain par
+  morceaux) — ça représenterait un million de colonnes à générer/mailler
+  d'un coup. Le prototype actuel (`scenes/world/platform.gd`) démarre à
+  **300 m × 300 m** (`Platform.size`, une constante exportée, facile à
+  changer). On pourra viser plus grand une fois un vrai système de chunks en
+  place ; d'ici là, 300 m reste largement de quoi remplir 1h+ avec plusieurs
+  biomes.
+- Le prototype actuel génère une **heightmap** (une hauteur par colonne, pas
+  encore une vraie grille de voxels creusable/empilable dans toutes les
+  directions). C'est volontairement une étape intermédiaire : la structure
+  de données va changer à l'étape "Interaction" (creuser/poser des blocs)
+  de la feuille de route, une fois qu'on doit vraiment stocker un voxel par
+  bloc plutôt qu'une seule hauteur par colonne.
 
 ## Flore et faune
 
