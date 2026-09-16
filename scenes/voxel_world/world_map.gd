@@ -55,7 +55,14 @@ extends RefCounted
 
 # --- Geometrie de l'ile ----------------------------------------------------
 const SEA_LEVEL := 30
-const EDGE_RATIO := 0.62          # fraction du rayon ou l'ocean reprend la main
+
+# Portee du continent, en fraction de la DEMI-largeur de carte : 1.0 est le
+# milieu d'un bord, et les coins sont a 1.41. Rester sous 1.0 est ce qui
+# garantit de l'ocean sur les quatre bords, donc une terre entierement
+# entouree d'eau quoi que raconte le bruit. La marge est la largeur de la
+# transition vers le large.
+const CONTINENT_REACH := 0.94
+const OCEAN_MARGIN := 0.26
 
 # Forme du continent. La frequence fixe la taille des golfes et des
 # peninsules : plus elle est basse, plus les decoupes sont amples. Le seuil
@@ -63,7 +70,7 @@ const EDGE_RATIO := 0.62          # fraction du rayon ou l'ocean reprend la main
 # descendre le fait deborder jusqu'aux bords de la carte.
 const CONTINENT_FREQUENCY := 0.0035
 const CONTINENT_OCTAVES := 4
-const COAST_THRESHOLD := 0.40
+const COAST_THRESHOLD := 0.31
 # Largeur du degrade au littoral, et courbure de la montee vers les terres.
 #
 # Les deux fabriquent les plages, et le passage au masque continental les a
@@ -423,7 +430,7 @@ func _build_base_relief(seed_value: int) -> void:
 			# ENTIEREMENT entoure d'eau quoi que raconte le bruit. Sans elle,
 			# le masque atteindrait les bords de la carte et le littoral y
 			# serait coupe net.
-			var radial := 1.0 - smoothstep(EDGE_RATIO - 0.28, EDGE_RATIO + 0.12, dist)
+			var radial := 1.0 - smoothstep(CONTINENT_REACH - OCEAN_MARGIN, CONTINENT_REACH, dist)
 			var shape := 0.5 + 0.5 * shape_noise.get_noise_2d(float(x), float(z))
 			var mask := shape * radial
 
