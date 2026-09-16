@@ -37,4 +37,28 @@ offset_left = 16.0
 offset_top = 16.0
 offset_right = 200.0
 offset_bottom = 40.0
+mouse_filter = 2
 text = "Blocs : 0"
+
+[node name="Crosshair" type="Control" parent="Hud"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+mouse_filter = 2
+
+[node name="Horizontal" type="ColorRect" parent="Hud/Crosshair"]
+offset_left = -7.0
+offset_top = -1.0
+offset_right = 7.0
+offset_bottom = 1.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.8)
+
+[node name="Vertical" type="ColorRect" parent="Hud/Crosshair"]
+offset_left = -1.0
+offset_top = -7.0
+offset_right = 1.0
+offset_bottom = 7.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.8)

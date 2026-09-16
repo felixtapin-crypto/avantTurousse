@@ -3,7 +3,9 @@ extends CharacterBody3D
 const SPEED := 5.0
 const JUMP_VELOCITY := 4.5
 const MOUSE_SENSITIVITY := 0.003
-const INTERACTION_RANGE := 6.0
+const INTERACTION_RANGE := 8.0
+const CROSSHAIR_IDLE_COLOR := Color(1, 1, 1, 0.8)
+const CROSSHAIR_TARGET_COLOR := Color(1, 0.85, 0.2, 1.0)
 
 const THIRD_PERSON_CAMERA_POS := Vector3(0, 1.2, 4.0)
 const ARRIVAL_HEIGHT := 45.0
@@ -16,6 +18,8 @@ const ARRIVAL_DURATION := 3.2
 @onready var sync: MultiplayerSynchronizer = $MultiplayerSynchronizer
 @onready var hud: CanvasLayer = $Hud
 @onready var block_label: Label = $Hud/BlockLabel
+@onready var crosshair_h: ColorRect = $Hud/Crosshair/Horizontal
+@onready var crosshair_v: ColorRect = $Hud/Crosshair/Vertical
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -103,6 +107,18 @@ func _physics_process(delta: float) -> void:
 		velocity.z = move_toward(velocity.z, 0, SPEED)
 
 	move_and_slide()
+
+
+# Le viseur passe en couleur vive des qu'une cible valide (a portee,
+# reellement touchee par le rayon) est dans le champ, pour qu'on sache tout
+# de suite si un clic va faire quelque chose ou non.
+func _process(_delta: float) -> void:
+	if not is_multiplayer_authority() or not arrived:
+		return
+	var has_target := not _raycast().is_empty()
+	var color := CROSSHAIR_TARGET_COLOR if has_target else CROSSHAIR_IDLE_COLOR
+	crosshair_h.color = color
+	crosshair_v.color = color
 
 
 # Creuse la colonne visee (baisse sa hauteur de 1m) et recupere un bloc.
