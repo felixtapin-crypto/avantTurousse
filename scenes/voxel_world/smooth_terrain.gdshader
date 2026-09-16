@@ -37,7 +37,19 @@ uniform float u_normal_strength : hint_range(0.0, 2.0) = 1.0;
 uniform float u_blend_sharpness : hint_range(1.0, 8.0) = 3.0;
 
 varying vec3 v_world_pos;
-varying vec4 v_material_indices;
+// `flat` est indispensable, pas une optimisation.
+//
+// Ce sont des INDICES entiers. Interpoles, ils prennent des valeurs
+// intermediaires, et `int()` bascule alors d'un pixel a l'autre entre deux
+// couches voisines. Chaque couche ayant sa propre echelle en metres, la
+// coordonnee de texture change brutalement d'un pixel au suivant : le
+// materiel calcule des derivees aberrantes, choisit un niveau de mipmap au
+// hasard, et le terrain se couvre d'un moucheton — d'autant plus dense que
+// les matieres se melangent, donc sur tout le littoral.
+//
+// C'est la cause qu'on a successivement attribuee a l'aliasing, aux ombres,
+// au plan d'eau et au z-fighting.
+varying flat vec4 v_material_indices;
 varying vec4 v_material_weights;
 
 
@@ -73,24 +85,43 @@ void fragment() {
 	vec3 wnormal = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	vec3 blending = get_triplanar_blend(wnormal, u_blend_sharpness);
 
+	// Certains sommets ressortent du mailleur avec QUATRE poids nuls. Diviser
+	// par une epsilon donnait alors quatre poids nuls, la boucle ne
+	// selectionnait aucune couche, l'albedo restait noir et le pixel ne
+	// montrait plus que l'ambiante bleue du ciel — le moucheton qu'on
+	// attribuait tour a tour a l'aliasing, aux ombres et au z-fighting.
+	// On retombe sur la premiere couche plutot que sur du vide.
 	vec4 weights = v_material_weights;
-	weights /= (weights.x + weights.y + weights.z + weights.w + 0.00001);
+	float weight_sum = weights.x + weights.y + weights.z + weights.w;
+	if (weight_sum < 0.001) {
+		weights = vec4(1.0, 0.0, 0.0, 0.0);
+		weight_sum = 1.0;
+	}
+	weights /= weight_sum;
 
 	vec3 albedo = vec3(0.0);
 	vec3 normal = vec3(0.0);
 	float roughness = 0.0;
 
-	// Quatre matieres melangeables par sommet, mais le generateur n'en ecrit
-	// qu'une seule a plein poids sauf aux frontieres de biome. Sauter les
-	// couches de poids nul evite donc, la plupart du temps, dix-huit lectures
-	// de texture sur les vingt-quatre possibles.
+	// Les QUATRE couches sont echantillonnees, sans condition, meme a poids
+	// nul. Ce n'est pas un oubli d'optimisation : sauter les couches inutiles
+	// mettait les appels a `texture()` dans un branchement DIVERGENT entre
+	// pixels voisins. Or le materiel calcule le niveau de mipmap a partir des
+	// derivees d'ecran, et celles-ci sont indefinies des qu'un pixel prend une
+	// branche et son voisin l'autre : le mip est alors tire au hasard, pixel
+	// par pixel, et le terrain se couvre d'un moucheton qu'on attribue
+	// volontiers a l'aliasing, aux ombres ou au z-fighting.
+	//
+	// Si le cout des vingt-quatre lectures devenait genant, la sortie n'est
+	// pas de rebrancher : c'est `textureGrad`, avec des derivees calculees en
+	// dehors de toute condition.
 	for (int i = 0; i < 4; i++) {
 		float weight = weights[i];
-		if (weight < 0.002) {
-			continue;
-		}
-		int layer = int(v_material_indices[i]);
-		vec3 wpos = v_world_pos / (u_layer_meters[layer] * u_scale);
+		// L'indice doit aussi etre borne : les emplacements de poids
+		// negligeable contiennent n'importe quoi, et un acces hors des huit
+		// couches est un comportement indefini.
+		int layer = clamp(int(v_material_indices[i]), 0, 7);
+		vec3 wpos = v_world_pos / max(u_layer_meters[layer] * u_scale, 0.05);
 
 		albedo += texture_array_triplanar(u_albedo_array, wpos, blending, float(layer)).rgb * weight;
 		normal += triplanar_normal(u_normal_array, wpos, wnormal, blending, float(layer)) * weight;
@@ -101,6 +132,10 @@ void fragment() {
 	ROUGHNESS = roughness;
 	METALLIC = 0.0;
 
-	vec3 shaped = normalize(mix(wnormal, normalize(normal), u_normal_strength));
+	// Si aucune couche n'a franchi le seuil de poids, la normale accumulee est
+	// nulle et la normaliser donnerait un NaN, donc un pixel noir. On retombe
+	// alors sur la normale geometrique.
+	vec3 mapped = length(normal) > 0.001 ? normalize(normal) : wnormal;
+	vec3 shaped = normalize(mix(wnormal, mapped, u_normal_strength));
 	NORMAL = normalize((VIEW_MATRIX * vec4(shaped, 0.0)).xyz);
 }

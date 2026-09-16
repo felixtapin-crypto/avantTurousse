@@ -28,6 +28,8 @@ var terrain: VoxelTerrain
 var _tool: VoxelTool
 var _message := ""
 var _message_timer := 0.0
+var _sky: SkyCycle
+var _sea: Sea
 
 
 func _ready() -> void:
@@ -77,42 +79,32 @@ func _ready() -> void:
 	player.flying = true
 	player.position = _spawn_position()
 
+	_add_sky()
 	_add_sea()
 
 	status_label.text = "Carte calculee en %d ms — streaming en cours..." % map_ms
 
 
 # En lisse, l'eau ne peut pas etre un voxel : la surface d'isovaleur est
-# unique, elle ne sait pas representer un volume translucide distinct. Un
-# simple plan a hauteur de mer suffit — et c'est exactement le point
-# d'accroche ou brancher le shader d'ocean deja disponible dans les autres
-# projets, qui gere la profondeur et l'ecume de rivage.
+# unique, elle ne sait pas representer un volume translucide distinct. C'est
+# donc une surface a part, avec son propre shader (voir sea.gd).
 func _add_sea() -> void:
-	var plane := MeshInstance3D.new()
-	plane.name = "Sea"
-	var mesh := PlaneMesh.new()
-	mesh.size = Vector2(float(map_size), float(map_size))
-	plane.mesh = mesh
+	_sea = Sea.new()
+	_sea.name = "Sea"
+	add_child(_sea)
+	_sea.setup(player, float(WorldMap.SEA_LEVEL))
 
-	# Une surface peu rugueuse ne vaut que par ce qu'elle reflete. Sans source
-	# de reflexion, la mer rendait en gris ardoise et ses aretes franches sur
-	# le relief passaient pour du z-fighting ; l'Environnement fournit
-	# desormais le ciel (`reflected_light_source`).
-	var material := StandardMaterial3D.new()
-	material.albedo_color = TerrainMaterials.COLOR[TerrainMaterials.Type.WATER]
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.roughness = 0.04
-	material.metallic = 0.25
-	# Le bord de l'eau s'eclaircit a l'incidence rasante, comme une vraie
-	# surface d'eau : c'est ce qui la distingue d'une dalle translucide.
-	material.rim_enabled = true
-	material.rim = 0.6
-	plane.material_override = material
-	plane.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	plane.position = Vector3(float(map_size) / 2.0, float(WorldMap.SEA_LEVEL), float(map_size) / 2.0)
-	add_child(plane)
+# Le ciel et le soleil sont pilotes par l'heure du jour. Le shader de ciel lit
+# la direction du soleil tout seul, donc il suffit de faire tourner la lumiere
+# pour que l'horizon suive — y compris le rougeoiement au lever et au coucher.
+func _add_sky() -> void:
+	_sky = SkyCycle.new()
+	_sky.name = "SkyCycle"
+	_sky.day_length_seconds = WorldSettings.day_length_seconds
+	_sky.time_of_day = WorldSettings.start_time_of_day
+	add_child(_sky)
+	_sky.setup($DirectionalLight3D, $WorldEnvironment.environment)
 
 
 # Le mailleur doit etre explicitement autorise a transporter la matiere.
@@ -132,7 +124,11 @@ func _build_mesher() -> VoxelMesherTransvoxel:
 	# Les voxels d'air portent eux aussi un indice de matiere, faute de quoi
 	# le generateur devrait traiter le vide a part ; les ignorer ici evite
 	# qu'ils ne diluent le melange sur les sommets de surface.
-	mesher.textures_ignore_air_voxels = true
+	# A true, le mailleur laisse des sommets aux quatre poids nuls la ou une
+	# cellule ne contient que de l'air exploitable. Nos voxels d'air portent de
+	# toute facon la matiere de leur colonne, donc les compter ne fausse rien
+	# et evite ce cas.
+	mesher.textures_ignore_air_voxels = false
 	return mesher
 
 
@@ -165,8 +161,9 @@ func _process(delta: float) -> void:
 		status_label.text = _message
 		return
 	var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
-	status_label.text = "lisse (Transvoxel) · seed %d · %d FPS · %s · %s · alt %d" % [
+	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d" % [
 		world_seed,
+		_sky.clock(),
 		Engine.get_frames_per_second(),
 		"vol" if player.flying else "marche",
 		map.biome_name(map.biome_at(cell.x, cell.z)),

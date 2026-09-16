@@ -28,6 +28,15 @@ const CORAL := Color("#e2725b")
 
 const SIZES := [300, 450, 600, 800]
 
+# Duree d'un cycle complet, en secondes reelles. DESIGN.md proposait 15 a 20
+# minutes ; les valeurs courtes servent a voir un lever et un coucher sans
+# attendre, pendant la mise au point.
+const DAY_LENGTHS := [120.0, 300.0, 900.0, 1800.0]
+const DAY_LABELS := ["2 min", "5 min", "15 min", "30 min"]
+
+const START_HOURS := [0.26, 0.50, 0.76, 0.95]
+const HOUR_LABELS := ["Aube", "Midi", "Couchant", "Nuit"]
+
 var _map: WorldMap
 var _layer := 0
 var _busy := false
@@ -40,6 +49,8 @@ var _land_value: Label
 var _flat_value: Label
 var _layer_buttons: Array[Button] = []
 var _size_buttons: Array[Button] = []
+var _day_buttons: Array[Button] = []
+var _hour_buttons: Array[Button] = []
 var _biome_rows: VBoxContainer
 var _play_button: Button
 var _cache_label: Label
@@ -172,6 +183,34 @@ func _build_side_column() -> Control:
 		size_row.add_child(button)
 	side.add_child(size_row)
 
+	# Rythme du monde. Ces deux reglages ne changent pas la carte — ils ne
+	# touchent donc pas a l'empreinte du cache — mais ils decident de
+	# l'ambiance d'une partie, ce qui a sa place ici plutot qu'en dur.
+	side.add_child(_gap(10))
+	side.add_child(_caption("DUREE D'UN JOUR"))
+	var day_row := HBoxContainer.new()
+	day_row.add_theme_constant_override("separation", 6)
+	for i in DAY_LENGTHS.size():
+		var button := _pill(DAY_LABELS[i])
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var index := i
+		button.pressed.connect(func(): _select_day_length(index))
+		_day_buttons.append(button)
+		day_row.add_child(button)
+	side.add_child(day_row)
+
+	side.add_child(_caption("HEURE DE DEPART"))
+	var hour_row := HBoxContainer.new()
+	hour_row.add_theme_constant_override("separation", 6)
+	for i in START_HOURS.size():
+		var button := _pill(HOUR_LABELS[i])
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var index := i
+		button.pressed.connect(func(): _select_start_hour(index))
+		_hour_buttons.append(button)
+		hour_row.add_child(button)
+	side.add_child(hour_row)
+
 	side.add_child(_gap(10))
 	var figures := HBoxContainer.new()
 	figures.add_theme_constant_override("separation", 18)
@@ -228,6 +267,8 @@ func _build_side_column() -> Control:
 	side.add_child(_play_button)
 
 	_select_size(SIZES.find(WorldSettings.size))
+	_select_day_length(DAY_LENGTHS.find(WorldSettings.day_length_seconds))
+	_select_start_hour(START_HOURS.find(WorldSettings.start_time_of_day))
 	return side
 
 
@@ -457,3 +498,22 @@ func _bar(color: Color) -> StyleBoxFlat:
 func _refresh_cache_label() -> void:
 	_cache_label.text = "Cache · %d carte(s) · empreinte %x" % [
 		MapCache.entry_count(), MapCache.parameters_hash() & 0xffffffff]
+
+
+# Duree du jour et heure de depart ne changent pas la carte : ils ne
+# declenchent donc aucune regeneration, contrairement a la seed et a la
+# taille.
+func _select_day_length(index: int) -> void:
+	if index < 0:
+		index = DAY_LENGTHS.find(900.0)
+	WorldSettings.day_length_seconds = DAY_LENGTHS[index]
+	for i in _day_buttons.size():
+		_mark_selected(_day_buttons[i], i == index)
+
+
+func _select_start_hour(index: int) -> void:
+	if index < 0:
+		index = 0
+	WorldSettings.start_time_of_day = START_HOURS[index]
+	for i in _hour_buttons.size():
+		_mark_selected(_hour_buttons[i], i == index)
