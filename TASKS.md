@@ -61,3 +61,13 @@ tâches plus petites au fur et à mesure :
   chute mortelle en dehors du bord. Remplace le sol plat du prototype
   initial. Reste en heightmap (pas encore une vraie grille de voxels) —
   à revoir à l'étape "Interaction".
+- 2026-09-16 — Correction du bug "apparaît sous la plateforme" au spawn +
+  cinématique d'arrivée : le joueur atterrit désormais à bord d'un engin
+  volant steampunk (placeholder en primitives) qui descend et se pose de
+  façon scriptée, plutôt que de compter sur la gravité pour "l'attraper" —
+  ce qui causait le bug. Detail de lore a priori sympa a reprendre dans
+  `DESIGN.md` si l'idee plait : c'est ainsi que les joueurs arrivent sur la
+  plateforme. Cote reseau : chaque joueur voit sa propre cinematique ;
+  les autres joueurs voient seulement sa position se deplacer (pas encore
+  l'engin volant) — a ameliorer plus tard si on veut que tout le monde
+  voit l'atterrissage de l'autre.

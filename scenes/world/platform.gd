@@ -30,7 +30,12 @@ func get_height_at(x: float, z: float) -> float:
 func get_spawn_position(offset: Vector2 = Vector2.ZERO) -> Vector3:
 	var cx := float(size) / 2.0 + offset.x
 	var cz := float(size) / 2.0 + offset.y
-	return Vector3(cx, get_height_at(cx, cz) + 1.0, cz)
+	# Une marge minime suffit : le joueur n'est plus "lache" en chute libre
+	# ici, sa position finale est fixee explicitement par la cinematique
+	# d'arrivee (voir Player._play_arrival_sequence). Une vraie marge de
+	# chute n'est plus necessaire et risquait de causer un chevauchement
+	# initial avec le sol avant que la physique ne "rattrape" le joueur.
+	return Vector3(cx, get_height_at(cx, cz) + 0.05, cz)
 
 
 func _build_heightmap(seed_value: int) -> void:
