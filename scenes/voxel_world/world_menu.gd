@@ -17,6 +17,7 @@ extends Control
 # 800 pese une vingtaine de megaoctets, et le menu en presente douze.
 
 const PREVIEW_SCENE := "res://scenes/voxel_world/map_preview.tscn"
+const WORLD_SCENE := "res://scenes/voxel_world/smooth_voxel_world.tscn"
 const STRIP_SIZE := Vector2(168, 106)
 
 var _entries: Array[Dictionary] = []
@@ -31,6 +32,7 @@ var _strip: HBoxContainer
 var _strip_buttons: Array[Button] = []
 var _play_button: Button
 var _empty_note: Label
+var _cache_label: Label
 
 
 func _ready() -> void:
@@ -151,16 +153,29 @@ func _build_ui() -> void:
 	_strip.add_theme_constant_override("separation", 10)
 	scroll.add_child(_strip)
 
-	for i in _entries.size():
-		var index := i
-		var button := _build_strip_item(_entries[i])
-		button.pressed.connect(func(): _select(index))
-		_strip_buttons.append(button)
-		_strip.add_child(button)
 
-	rows.add_child(IslandUI.label(
+	# Pied de page : les touches a gauche, l etat du cache a droite. Le cache est
+	# EXPOSE plutot que cache — c est lui qui remplit cet ecran, et l empreinte
+	# change des qu on retouche un reglage de generation. Le voir evite de se
+	# demander pourquoi des mondes ont disparu.
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 10)
+
+	var hints := IslandUI.label(
 		"← → choisir     ENTREE explorer     N nouvelle carte     ECHAP quitter",
-		13, Color(IslandUI.INK, 0.40)))
+		13, Color(IslandUI.INK, 0.40))
+	hints.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.add_child(hints)
+
+	_cache_label = IslandUI.label("", 12, Color(IslandUI.INK, 0.35))
+	footer.add_child(_cache_label)
+
+	var clear_button := IslandUI.pill("Vider le cache")
+	clear_button.pressed.connect(_clear_cache)
+	footer.add_child(clear_button)
+
+	rows.add_child(footer)
+	_rebuild_strip()
 
 
 # Une vignette de pellicule : l'image, et le nom du monde en incrustation.
@@ -292,20 +307,68 @@ func _mark_strip(button: Button, selected: bool) -> void:
 
 # --- Actions ---------------------------------------------------------------
 
-# Reprendre un monde passe par l'ecran d'apercu plutot que d'entrer en jeu.
+# Reprendre un monde entre DIRECTEMENT en jeu.
 #
-# C'est lui qui porte les reglages de rythme — duree du jour, heure de depart —
-# qui ne sont pas dans le nom du fichier de cache et n'ont donc rien a faire
-# sur une vignette. La carte etant en cache, l'apercu s'affiche d'un coup : le
-# detour ne coute rien et laisse le choix.
+# L'apercu n'a rien a apprendre ici : on vient de choisir une carte en la
+# voyant, avec ses mesures. Le detour ne servait qu'aux reglages de rythme
+# (duree du jour, heure de depart), qui gardent leur derniere valeur et se
+# reglent a la composition d'une carte neuve.
+#
+# La carte est CHARGEE ICI et transmise a la scene de jeu. C'est la meme
+# seconde de lecture dans les deux cas, mais ici elle est annoncee : faite dans
+# le `_ready` du monde, elle fige une fenetre noire avant que le moindre
+# libelle ait pu etre peint.
 func _open() -> void:
 	if _entries.is_empty():
 		return
 	var entry := _entries[_selected]
 	WorldSettings.seed_value = int(entry["seed"])
 	WorldSettings.size = int(entry["size"])
-	get_tree().change_scene_to_file(PREVIEW_SCENE)
+
+	_title.text = "Ouverture..."
+	_subtitle.text = WorldName.for_seed(int(entry["seed"]))
+	_portrait.text = ""
+	_play_button.disabled = true
+	await get_tree().process_frame
+
+	WorldSettings.prepared_map = MapCache.load_or_generate(
+		int(entry["seed"]), int(entry["size"]), WorldSettings.height)
+	get_tree().change_scene_to_file(WORLD_SCENE)
 
 
 func _new_map() -> void:
 	get_tree().change_scene_to_file(PREVIEW_SCENE)
+
+
+# La pellicule est reconstruite plutot que modifiee : vider le cache change le
+# nombre de vignettes, et il n'y a pas dix mondes a menager.
+func _rebuild_strip() -> void:
+	for child in _strip.get_children():
+		_strip.remove_child(child)
+		child.queue_free()
+	_strip_buttons.clear()
+
+	for i in _entries.size():
+		var index := i
+		var button := _build_strip_item(_entries[i])
+		button.pressed.connect(func(): _select(index))
+		_strip_buttons.append(button)
+		_strip.add_child(button)
+
+	_cache_label.text = "Cache · %d monde(s) · empreinte %x" % [
+		_entries.size(), MapCache.parameters_hash() & 0xffffffff]
+
+
+# Vider le cache efface les mondes ET leurs vignettes.
+#
+# Il n'y a pas de confirmation, et c'est defendable : rien n'est perdu pour de
+# bon. Une carte se retrouve a l'identique en ressaisissant sa graine, puisque
+# c'est tout ce dont depend le monde — le cache ne fait qu'eviter d'en repayer
+# le calcul.
+func _clear_cache() -> void:
+	MapCache.clear()
+	_entries = []
+	_selected = 0
+	_rebuild_strip()
+	_backdrop.texture = null
+	_select(0)
