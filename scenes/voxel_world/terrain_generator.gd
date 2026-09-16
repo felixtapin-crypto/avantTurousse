@@ -56,39 +56,61 @@ const LAYER_COUNT := 8
 # sommets enneiges en roche.
 const SURFACE_SKIN := 2
 
-# Poids « une seule matiere » : la premiere a 100 %, les autres a zero.
+# Noyau du melange de surface, par triplets (dx, dz, poids) en metres.
 #
-# Il servait autrefois PARTOUT, au motif que l'interpolation des sommets faite
-# par le mailleur suffirait a fondre deux matieres voisines. Elle ne le peut
-# pas : le shader lit les indices de matiere en `flat` — il le doit, ce sont
-# des entiers, voir la note dans smooth_terrain.gdshader — donc chaque triangle
-# prend le jeu d'indices d'un seul de ses sommets. Avec une matiere unique par
-# voxel, la limite entre deux biomes suivait exactement les aretes des
-# triangles, et se voyait d'autant plus que les matieres se ressemblaient peu.
+# Il est en ANNEAUX et non en carre plein, et c'est le resultat de deux
+# erreurs successives qu'il vaut mieux ne pas refaire.
 #
-# Il ne sert donc plus que SOUS la surface, ou une limite franche entre deux
-# strates est geologiquement juste et se lit bien en creusant.
-const FULL_WEIGHT := Color(1.0, 0.0, 0.0, 0.0)
-
-# Ecart, en metres, entre deux points du noyau qui melange les matieres de
-# surface. Le fondu s'etale sur a peu pres quatre fois cette valeur.
+# Un carre 5x5 au pas de DEUX metres quantifiait la transition : les poids ne
+# changeaient que tous les deux metres et la limite ressortait en escalier a
+# marches carrees — le defaut qu'on voulait effacer, deplace d'une echelle.
 #
-# Il vaut 1 et pas davantage : c'est le pas d'echantillonnage qui QUANTIFIE la
-# transition. A 2, les poids ne changeaient que tous les deux metres et la
-# limite ressortait en escalier a marches carrees — le defaut meme qu'on
-# cherchait a effacer, simplement deplace d'une echelle.
-const BLEND_SPACING := 1
+# Le meme carre au pas d'UN metre reglait les marches mais ne portait plus qu'a
+# deux metres. Or la PORTEE commande tout : le shader ne sait faire divaguer
+# une limite que la ou les DEUX matieres figurent parmi les quatre emplacements
+# du voxel. Au-dela du noyau une seule y figure, et il n'y a plus rien a
+# melanger — c'est pourquoi ajouter du bruit au shader ne changeait presque
+# rien.
+#
+# Les anneaux achetent donc SEPT metres de portee au prix du carre : vingt-cinq
+# lectures. Ils echantillonnent grossierement au loin, ce qui reintroduirait
+# des marches ; c'est le pinceau du shader qui les dissout, et les deux ne
+# valent qu'ensemble.
+const BLEND_KERNEL := [
+	0, 0, 12,
 
-var map: WorldMap
+	2, 0, 6,   -2, 0, 6,   0, 2, 6,    0, -2, 6,
+	1, 1, 6,   1, -1, 6,   -1, 1, 6,   -1, -1, 6,
 
-var _encoded_weights := 0
-# Biome -> couche de surface. Ce melange fait vingt-cinq lectures par colonne :
+	4, 0, 3,   -4, 0, 3,   0, 4, 3,    0, -4, 3,
+	3, 3, 3,   3, -3, 3,   -3, 3, 3,   -3, -3, 3,
+
+	7, 0, 1,   -7, 0, 1,   0, 7, 1,    0, -7, 1,
+	5, 5, 1,   5, -5, 1,   -5, 5, 1,   -5, -5, 1,
+]
+
+# Les tables sont construites A L'AFFECTATION de la carte, et surtout pas
+# paresseusement au premier bloc.
+#
+# `_generate_block` tourne sur PLUSIEURS THREADS de streaming a la fois. Une
+# initialisation paresseuse y est une course : deux threads trouvent la table
+# vide en meme temps et la remplissent tous les deux. Le jeu se fermait alors au
+# bout de quelques secondes, sans message, avec le code 127 — un plantage franc
+# dont rien n'indiquait la provenance.
+#
+# Ici le setter est appele par la scene, sur le fil principal, avant que le
+# moindre bloc ne soit demande.
+var map: WorldMap:
+	set(value):
+		map = value
+		if map != null:
+			_build_tables()
+
+# Biome -> couche de surface. Le melange fait vingt-cinq lectures par colonne :
 # une table evite d'y refaire a chaque fois deux appels de fonction.
 var _biome_layer := PackedInt32Array()
-
-
-func _init() -> void:
-	_encoded_weights = VoxelTool.color_to_u16_weights(FULL_WEIGHT)
+# Matiere unique -> le couple (indices, poids) deja encode.
+var _single_material: Array[Vector2i] = []
 
 
 func _get_used_channels_mask() -> int:
@@ -98,7 +120,6 @@ func _get_used_channels_mask() -> int:
 func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) -> void:
 	if map == null:
 		return
-	_ensure_biome_layers()
 
 	# Les canaux de matiere sont sur 16 bits : 4 indices et 4 poids de 4 bits.
 	buffer.set_channel_depth(INDICES_CHANNEL, VoxelBuffer.DEPTH_16_BIT)
@@ -173,14 +194,39 @@ func _generate_block(buffer: VoxelBuffer, origin_in_voxels: Vector3i, lod: int) 
 
 
 func _fill_material(buffer: VoxelBuffer, layer: int) -> void:
-	buffer.fill(VoxelTool.vec4i_to_u16_indices(Vector4i(layer, 0, 0, 0)), INDICES_CHANNEL)
-	buffer.fill(_encoded_weights, WEIGHTS_CHANNEL)
+	var mix := _single_material[layer]
+	buffer.fill(mix.x, INDICES_CHANNEL)
+	buffer.fill(mix.y, WEIGHTS_CHANNEL)
 
 
 func _set_material(buffer: VoxelBuffer, x: int, y: int, z: int, layer: int) -> void:
-	buffer.set_voxel(
-		VoxelTool.vec4i_to_u16_indices(Vector4i(layer, 0, 0, 0)), x, y, z, INDICES_CHANNEL)
-	buffer.set_voxel(_encoded_weights, x, y, z, WEIGHTS_CHANNEL)
+	_set_material_mix(buffer, x, y, z, _single_material[layer])
+
+
+# Complete un jeu de matieres a QUATRE indices DISTINCTS, les emplacements
+# ajoutes restant a poids nul.
+#
+# C'est la regle qu'on ignorait, et elle a coute cher. Les emplacements
+# inutilises etaient remplis de zeros — or zero est une vraie couche, l'herbe.
+# Une colonne d'herbe pure ecrivait donc (0, 0, 0, 0) : quatre fois la meme
+# matiere. Le mailleur, qui renormalise le jeu d'indices en ordre croissant et
+# redistribue les poids en consequence, ne sait rien faire d'un ensemble
+# degenere : il ressortait le jeu par defaut (0, 1, 2, 3) avec QUATRE POIDS
+# NULS, et le shader retombait sur son repli.
+#
+# DEUX TIERS des sommets de surface etaient dans ce cas. La surface n'etait donc
+# pas fondue du tout sur l'essentiel de l'ile, ce qui explique pourquoi elargir
+# le noyau puis ajouter un pinceau ne changeait presque rien : le melange etait
+# bien calcule, et jete juste apres.
+# Le tableau est RENDU, pas modifie sur place : les Packed*Array sont des types
+# VALEUR en GDScript, et une modification faite ici serait perdue au retour.
+func _pad_to_four(kept: PackedInt32Array) -> PackedInt32Array:
+	for layer in LAYER_COUNT:
+		if kept.size() >= 4:
+			break
+		if not kept.has(layer):
+			kept.append(layer)
+	return kept
 
 
 func _set_material_mix(buffer: VoxelBuffer, x: int, y: int, z: int, mix: Vector2i) -> void:
@@ -192,21 +238,15 @@ func _set_material_mix(buffer: VoxelBuffer, x: int, y: int, z: int, mix: Vector2
 # mots de 16 bits qu'attendent les canaux : `x` les quatre indices, `y` les
 # quatre poids.
 #
-# Le noyau est un 5x5 a ponderation triangulaire. Une moyenne des quatre
-# voisins immediats donnerait un fondu de deux metres, encore lu comme une
-# limite ; un noyau beaucoup plus large delaverait les petits biomes, qui font
-# parfois une dizaine de metres a peine.
+# Voir BLEND_KERNEL pour la forme du noyau et les raisons de sa portee.
 func _surface_mix(wx: int, wz: int) -> Vector2i:
 	var totals := PackedInt32Array()
 	totals.resize(LAYER_COUNT)
 
-	for j in range(-2, 3):
-		var row := 3 - absi(j)
-		var sz := wz + j * BLEND_SPACING
-		for i in range(-2, 3):
-			var sx := wx + i * BLEND_SPACING
-			var layer := _biome_layer[map.biome_at(sx, sz)]
-			totals[layer] += row * (3 - absi(i))
+	for k in range(0, BLEND_KERNEL.size(), 3):
+		var layer := _biome_layer[
+			map.biome_at(wx + BLEND_KERNEL[k], wz + BLEND_KERNEL[k + 1])]
+		totals[layer] += BLEND_KERNEL[k + 2]
 
 	# Les quatre matieres les plus representees : au-dela, le format n'a plus
 	# de place. Selection par passes plutot que par tri — il n'y a que huit
@@ -221,6 +261,8 @@ func _surface_mix(wx: int, wz: int) -> Vector2i:
 		if best < 0:
 			break
 		kept.append(best)
+
+	kept = _pad_to_four(kept)
 
 	# Ordre CANONIQUE, par indice croissant. C'est indispensable, pas cosmetique
 	# : les indices etant lus en `flat`, un triangle applique des poids
@@ -246,14 +288,31 @@ func _surface_mix(wx: int, wz: int) -> Vector2i:
 			Color(weights[0], weights[1], weights[2], weights[3])))
 
 
-# Construite une fois : `surface_block` et `layer_for` ne dependent que du
-# biome, et `_surface_mix` les appellerait vingt-cinq fois par colonne.
-func _ensure_biome_layers() -> void:
-	if not _biome_layer.is_empty():
-		return
+# Construites une fois, a l affectation de la carte : voir la note sur `map`.
+#
+# `surface_block` et `layer_for` ne dependent que du biome, et `_surface_mix`
+# les appellerait vingt-cinq fois par colonne.
+func _build_tables() -> void:
 	_biome_layer.resize(WorldMap.Biome.size())
 	for biome in _biome_layer.size():
 		_biome_layer[biome] = layer_for(map.surface_block(biome))
+
+	# Le couple (indices, poids) d'une matiere UNIQUE, pour les huit couches.
+	# Meme regle que `_pad_to_four` : les trois emplacements libres recoivent des
+	# indices distincts, a poids nul.
+	_single_material.clear()
+	for layer in LAYER_COUNT:
+		var kept := _pad_to_four(PackedInt32Array([layer]))
+		kept.sort()
+		var weights := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+		for k in 4:
+			if kept[k] == layer:
+				weights[k] = 1.0
+		_single_material.append(Vector2i(
+			VoxelTool.vec4i_to_u16_indices(
+				Vector4i(kept[0], kept[1], kept[2], kept[3])),
+			VoxelTool.color_to_u16_weights(
+				Color(weights[0], weights[1], weights[2], weights[3]))))
 
 
 func layer_for(block_type: int) -> int:

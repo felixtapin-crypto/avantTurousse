@@ -75,7 +75,25 @@ uniform float u_macro_strength : hint_range(0.0, 1.0) = 0.22;
 uniform float u_height_influence : hint_range(0.0, 1.0) = 0.35;
 // Epaisseur de la zone ou deux matieres coexistent. Plus petit = bord plus
 // net, jusqu'a cliqueter.
-uniform float u_blend_depth : hint_range(0.01, 0.5) = 0.12;
+uniform float u_blend_depth : hint_range(0.01, 0.5) = 0.18;
+
+// --- Pinceau ---
+//
+// Le melange par hauteur RESSERRE la limite : c'est sa raison d'etre, il
+// remplace un fondu mou par un engrenage. Mais resserrer une limite deja
+// courte redonne une coupure nette.
+//
+// On fait donc DIVAGUER les poids avant de le calculer. La frontiere cesse de
+// suivre la ligne ou les poids s'egalisent — laquelle est lisse, et c'est
+// precisement ce qui la fait lire comme une decoupe — pour serpenter au gre
+// d'un bruit a deux octaves. L'une porte le trait, l'autre la frange.
+//
+// Le bruit est CENTRE sur zero : il deplace la limite sans favoriser aucune
+// matiere. Et son amplitude reste petite devant l'ecart entre 0 et 1, donc une
+// matiere absente ne peut pas surgir en plein milieu d'une zone pure — elle ne
+// divague que la ou les deux se disputent deja le terrain.
+uniform float u_brush_meters = 6.0;
+uniform float u_brush_strength : hint_range(0.0, 1.0) = 0.45;
 
 varying vec3 v_world_pos;
 // `flat` est indispensable, pas une optimisation.
@@ -210,7 +228,29 @@ void fragment() {
 		heights[i] = array_triplanar(u_height_array, pyz, pxz, pxy,
 			meters[i], blending, float(layer)).r;
 	}
-	vec4 mix_weights = height_blend(heights, weights);
+	// Le pinceau : une limite de biome est une courbe AU SOL, donc c'est sur le
+	// plan horizontal qu'il faut la perturber, et en coordonnees monde pour
+	// qu'elle ne bouge pas avec la camera.
+	vec2 bp = v_world_pos.xz / u_brush_meters;
+	vec4 brush = vec4(
+		value_noise(bp),
+		value_noise(bp + 17.1),
+		value_noise(bp + 41.7),
+		value_noise(bp + 73.3));
+	vec4 fringe = vec4(
+		value_noise(bp * 2.9 + 5.3),
+		value_noise(bp * 2.9 + 23.9),
+		value_noise(bp * 2.9 + 51.1),
+		value_noise(bp * 2.9 + 89.7));
+	// Masque des emplacements REELLEMENT occupes. Indispensable : les
+	// emplacements inutilises portent l'indice 0 — donc l'herbe — avec un poids
+	// nul, et le bruit du pinceau, qui est centre sur zero, suffirait a les
+	// faire franchir le seuil. On verrait de l'herbe apparaitre entre deux
+	// matieres qui n'en contiennent pas.
+	vec4 present = step(0.001, weights);
+	vec4 brushed = max(weights + (mix(brush, fringe, 0.4) - 0.5) * u_brush_strength, 0.0) * present;
+
+	vec4 mix_weights = height_blend(heights, brushed);
 
 	vec3 albedo = vec3(0.0);
 	vec3 normal = vec3(0.0);

@@ -429,6 +429,9 @@ func _check_surface_materials(map: WorldMap) -> int:
 	mesher.textures_ignore_air_voxels = true
 
 	var matched := 0
+	var present := 0
+	var empty := 0
+	var seen_stride := 0
 	var total := 0
 	var confusions := {}
 
@@ -458,6 +461,18 @@ func _check_surface_materials(map: WorldMap) -> int:
 		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var custom1: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM1]
 
+		# Le PAS est deduit, jamais suppose. CUSTOM1 peut arriver en RG (deux
+		# flottants par sommet) comme en RGBA (quatre), et se tromper ne casse
+		# rien de visible : on lit alors la seconde moitie du sommet precedent,
+		# donc des zeros, et on conclut a des poids nuls — un sommet sur deux.
+		@warning_ignore("integer_division")
+		var stride: int = custom1.size() / maxi(vertices.size(), 1)
+		if stride < 2:
+			continue
+		if stride != seen_stride:
+			seen_stride = stride
+			print("  CUSTOM1 : %d flottants par sommet" % stride)
+
 		for i in vertices.size():
 			var world := Vector3(origin) + vertices[i]
 			var col_x := floori(world.x)
@@ -471,11 +486,26 @@ func _check_surface_materials(map: WorldMap) -> int:
 
 			var biome := map.biome_at(col_x, col_z)
 			var expected: int = generator.layer_for(map.surface_block(biome))
-			var got := _dominant_layer(custom1[i * 2], custom1[i * 2 + 1])
+			var got := _dominant_layer(custom1[i * stride], custom1[i * stride + 1])
 
 			total += 1
+			if _weights_are_empty(
+					PackedFloat32Array([custom1[i * stride + 1]]).to_byte_array()):
+				empty += 1
 			if got == expected:
 				matched += 1
+			# Ce qui est VRAIMENT invariant, c'est la PRESENCE de la matiere du
+			# biome parmi les quatre emplacements — pas qu'elle y domine.
+			#
+			# Le taux de domination etait le seul critere tant qu'un voxel ne
+			# portait qu'une matiere. Depuis que la surface est fondue, un
+			# sommet a sept metres d'une limite porte legitimement celle du
+			# voisin en majorite, et ce taux baisse a MESURE que le fondu
+			# s'elargit — c'est-a-dire qu'il descend quand le rendu s'ameliore.
+			# Le garder comme seul garde-fou revenait a plafonner la largeur du
+			# fondu sans l'avoir decide.
+			if _has_layer(custom1[i * stride], custom1[i * stride + 1], expected):
+				present += 1
 			else:
 				var key := "%s attendu %d, obtenu %d" % [map.biome_name(biome), expected, got]
 				confusions[key] = int(confusions.get(key, 0)) + 1
@@ -485,20 +515,48 @@ func _check_surface_materials(map: WorldMap) -> int:
 		return 1
 
 	var rate := 100.0 * float(matched) / float(total)
-	print("  %d sommets de surface, %.1f %% portent la matiere du biome" % [total, rate])
+	var present_rate := 100.0 * float(present) / float(total)
+	print("  %d sommets de surface" % total)
+	print("    %.1f %% PORTENT la matiere du biome (invariant, seuil 95 %%)" % present_rate)
+	print("    %.1f %% l'ont pour matiere dominante (indicatif : baisse quand le fondu s'elargit)"
+		% rate)
+	print("    %.1f %% sortent du mailleur SANS aucun poids (repli sur le 1er emplacement)"
+		% (100.0 * float(empty) / float(total)))
 	var keys := confusions.keys()
 	keys.sort_custom(func(a, b): return confusions[a] > confusions[b])
 	for key in keys.slice(0, 5):
 		print("    %-44s %d sommets" % [key, confusions[key]])
 
-	if rate < 85.0:
-		printerr("  la matiere affichee ne suit pas les biomes")
+	if present_rate < 95.0:
+		printerr("  la matiere du biome est ABSENTE de trop de sommets")
 		return 1
 	return 0
 
 
 # Indice de la matiere au poids le plus fort, decode comme le fait le shader :
 # quatre indices dans les octets de CUSTOM1.x, quatre poids dans CUSTOM1.y.
+# La matiere figure-t-elle parmi les quatre, avec un poids non nul ?
+#
+# Le decodage doit reproduire EXACTEMENT celui du shader, replis compris, sinon
+# le controle mesure autre chose que ce qui s'affiche. En particulier, une part
+# des sommets sort du mailleur avec quatre poids nuls ; le shader retombe alors
+# sur le premier emplacement (voir smooth_terrain.gdshader), et c'est donc bien
+# cette matiere-la qui est peinte.
+func _has_layer(packed_indices: float, packed_weights: float, layer: int) -> bool:
+	var indices := PackedFloat32Array([packed_indices]).to_byte_array()
+	var weights := PackedFloat32Array([packed_weights]).to_byte_array()
+	if _weights_are_empty(weights):
+		return indices[0] == layer
+	for slot in 4:
+		if indices[slot] == layer and weights[slot] > 0:
+			return true
+	return false
+
+
+func _weights_are_empty(weights: PackedByteArray) -> bool:
+	return weights[0] + weights[1] + weights[2] + weights[3] == 0
+
+
 func _dominant_layer(packed_indices: float, packed_weights: float) -> int:
 	var indices := PackedFloat32Array([packed_indices]).to_byte_array()
 	var weights := PackedFloat32Array([packed_weights]).to_byte_array()
