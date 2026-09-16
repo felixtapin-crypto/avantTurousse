@@ -21,6 +21,8 @@ var _exit_fill: ColorRect
 var _exit_label: Label
 var _water_veil: ColorRect
 var _camera: Camera3D
+# Provisoire : voir la section LAMPE DE GROTTE en bas de fichier.
+var _cave_lamp: OmniLight3D
 
 @export var world_seed: int = 1
 @export var map_size: int = 600
@@ -109,6 +111,8 @@ func _ready() -> void:
 	var cameras := player.find_children("*", "Camera3D", true, false)
 	if not cameras.is_empty():
 		_camera = cameras[0] as Camera3D
+
+	_build_cave_lamp()
 
 	_add_sky()
 	_add_sea()
@@ -371,6 +375,9 @@ func _update_immersion() -> void:
 	# Voir la note en tete de SkyCycle : l'ambiante et la perspective aerienne
 	# traversent la roche, et c'est le seul moyen de les eteindre sous terre.
 	_sky.underground = smoothstep(0.0, 6.0, float(column) - eye.y)
+	# PROVISOIRE : cf. la section LAMPE DE GROTTE.
+	if _cave_lamp != null:
+		_cave_lamp.light_energy = _sky.underground * CAVE_LAMP_ENERGY
 
 	var submerged := eye.y < float(WorldMap.SEA_LEVEL) and column <= WorldMap.SEA_LEVEL
 	_sky.underwater = 1.0 if submerged else 0.0
@@ -391,3 +398,43 @@ func _build_water_veil() -> void:
 	_water_veil.visible = false
 	$Hud.add_child(_water_veil)
 	$Hud.move_child(_water_veil, 0)
+
+
+# ===========================================================================
+# LAMPE DE GROTTE — PROVISOIRE, A SUPPRIMER
+# ===========================================================================
+#
+# Une galerie est d'un noir complet : la roche occulte le soleil, et l'ambiante
+# y est volontairement eteinte (voir SkyCycle). C'est physiquement juste et
+# injouable — on ne voit litteralement rien.
+#
+# Cette lampe est un ECHAFAUDAGE, pas une mecanique. Elle suit le joueur, ne
+# coute rien, et n'a aucune justification dans la fiction : personne ne
+# rayonne. Elle disparait le jour ou le jeu aura de quoi s'eclairer — torche,
+# lanterne, feu de camp — et c'est `DESIGN.md` qui les prevoit deja
+# ("artisanat de base : outils, briquet, feu"), voir issue #10 et issue #41.
+#
+# Ce qu'il faudra retirer : cette section, l'appel dans `_ready`, et la ligne
+# qui regle son energie dans `_update_immersion`.
+#
+# Elle ne projette PAS d'ombre, ce qui la fait traverser les parois minces.
+# C'est assume : une omni a ombres portees suivant le joueur dans un terrain
+# qui se remaille en permanence coute cher, et l'echafaudage ne merite pas
+# cette depense.
+const CAVE_LAMP_RANGE := 20.0
+const CAVE_LAMP_ENERGY := 3.4
+const CAVE_LAMP_COLOR := Color(1.0, 0.87, 0.68)
+
+
+func _build_cave_lamp() -> void:
+	_cave_lamp = OmniLight3D.new()
+	_cave_lamp.name = "LampeProvisoire"
+	_cave_lamp.omni_range = CAVE_LAMP_RANGE
+	_cave_lamp.omni_attenuation = 0.9
+	_cave_lamp.light_color = CAVE_LAMP_COLOR
+	_cave_lamp.light_energy = 0.0
+	_cave_lamp.shadow_enabled = false
+	# Un peu au-dessus des pieds, pour eclairer le sol devant plutot que de
+	# poser le joueur au centre d'une bulle.
+	_cave_lamp.position = Vector3(0.0, 1.2, 0.0)
+	player.add_child(_cave_lamp)
