@@ -7,6 +7,7 @@ const PlayerScene := preload("res://scenes/player/player.tscn")
 # pour que la plateforme soit reproductible pendant qu'on teste.
 const PLATFORM_SEED := 1
 const VEGETATION_SEED := PLATFORM_SEED + 1000 # decorele de la seed du terrain
+const FOOD_PLANTS_SEED := PLATFORM_SEED + 2000
 
 const FALL_LIMIT_Y := -30.0
 
@@ -20,6 +21,8 @@ const RAIN_THRESHOLD := 0.35      # au-dessus de ce seuil de bruit, il pleut
 
 @onready var platform: Platform = $Platform
 @onready var vegetation: Vegetation = $Vegetation
+@onready var water: Water = $Water
+@onready var food_plants: FoodPlants = $FoodPlants
 @onready var players_root: Node3D = $Players
 @onready var wrecks_root: Node3D = $Wrecks
 @onready var spawner: MultiplayerSpawner = $MultiplayerSpawner
@@ -33,6 +36,8 @@ var _weather_noise := FastNoiseLite.new()
 func _ready() -> void:
 	platform.generate(PLATFORM_SEED)
 	vegetation.generate(VEGETATION_SEED, platform)
+	water.generate(platform)
+	food_plants.generate(FOOD_PLANTS_SEED, platform, water)
 	_weather_noise.seed = WEATHER_SEED
 
 	spawner.spawn_path = players_root.get_path()
@@ -101,6 +106,10 @@ func is_raining() -> bool:
 # synchronisee entre pairs, seulement calculee independamment par chacun.
 func get_time_of_day() -> float:
 	return day_night_cycle.time_of_day
+
+
+func is_over_water(x: float, z: float) -> bool:
+	return water.is_water_at(x, z)
 
 
 # Garde une trace visuelle de l'atterrissage de chaque joueur : l'engin volant

@@ -12,6 +12,15 @@ const ARRIVAL_HEIGHT := 45.0
 const ARRIVAL_APPROACH := Vector3(-20.0, 0.0, -20.0)
 const ARRIVAL_DURATION := 3.2
 
+# Vide les jauges en ~15 min (calque sur la duree d'un cycle jour/nuit, voir
+# day_night_cycle.gd) ; a recalibrer en playtest, cf DESIGN.md "Boucle de
+# survie". La soif descend un peu plus vite que la faim, plus realiste.
+const HUNGER_DECAY_PER_SEC := 100.0 / 900.0
+const THIRST_DECAY_PER_SEC := 100.0 / 650.0
+const HARVEST_HUNGER_RESTORE := 35.0
+const DRINK_THIRST_RESTORE := 50.0
+const BAR_FULL_WIDTH := 150.0
+
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
 @onready var mesh: MeshInstance3D = $MeshInstance3D
@@ -21,6 +30,9 @@ const ARRIVAL_DURATION := 3.2
 @onready var crosshair_h: ColorRect = $Hud/Crosshair/Horizontal
 @onready var crosshair_v: ColorRect = $Hud/Crosshair/Vertical
 @onready var clock_label: Label = $Hud/ClockLabel
+@onready var hunger_fill: ColorRect = $Hud/HungerBarBg/HungerBarFill
+@onready var thirst_fill: ColorRect = $Hud/ThirstBarBg/ThirstBarFill
+@onready var message_label: Label = $Hud/MessageLabel
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -41,6 +53,18 @@ var block_count := 5
 # Debloque par Collectible.pick_up() une fois l'horloge trouvee par
 # n'importe quel joueur de l'equipe (voir DESIGN.md, gabarit "L'horloge").
 var has_clock := false
+
+# Idem pour l'outil de recolte, sans lequel on ne peut pas cueillir de
+# plante (sauvage ou cultivee). Comme pour l'horloge, Collectible.pick_up()
+# debloque l'outil pour toute l'equipe des qu'un seul joueur le trouve
+# (meme mecanisme, pas un objet qu'on se passe physiquement) - a
+# rediscuter si on veut plutot un objet unique porte par un seul joueur.
+var has_harvest_tool := false
+
+# Jauges de survie (voir DESIGN.md, "Boucle de survie"). Ce qui se passe a 0
+# reste une question ouverte (pas de penalite implementee pour l'instant).
+var hunger := 100.0
+var thirst := 100.0
 
 var _arrival_start: Vector3
 var _arrival_target: Vector3
@@ -125,7 +149,7 @@ func _physics_process(delta: float) -> void:
 # de suite si un clic va faire quelque chose ou non. On en profite pour
 # activer/desactiver la pluie locale selon la meteo partagee (World.is_raining,
 # calculee independamment par chaque pair mais identique au meme instant).
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not is_multiplayer_authority() or not arrived:
 		return
 
@@ -142,11 +166,20 @@ func _process(_delta: float) -> void:
 	if has_clock:
 		clock_label.text = _format_time(world.get_time_of_day())
 
+	hunger = maxf(0.0, hunger - HUNGER_DECAY_PER_SEC * delta)
+	thirst = maxf(0.0, thirst - THIRST_DECAY_PER_SEC * delta)
+	hunger_fill.size.x = BAR_FULL_WIDTH * (hunger / 100.0)
+	thirst_fill.size.x = BAR_FULL_WIDTH * (thirst / 100.0)
 
-# Creuse la colonne visee (baisse sa hauteur de 1m) et recupere un bloc -
-# sauf si on vise plutot un objet ramassable (Collectible), auquel cas on le
-# recupere a la place.
+
+# Boire (si on est sur de l'eau), ramasser un Collectible, recolter une
+# FoodPlant (si on a l'outil), ou creuser la colonne visee (baisse sa
+# hauteur de 1m, +1 bloc) - dans cet ordre de priorite.
 func _dig() -> void:
+	if world.is_over_water(position.x, position.z):
+		thirst = minf(100.0, thirst + DRINK_THIRST_RESTORE)
+		return
+
 	var hit := _raycast()
 	if hit.is_empty():
 		return
@@ -154,6 +187,14 @@ func _dig() -> void:
 	var collider = hit.get("collider")
 	if collider is Collectible:
 		collider.pick_up.rpc()
+		return
+
+	if collider is FoodPlant:
+		if not has_harvest_tool:
+			_show_message("Il faut un outil de récolte.")
+			return
+		collider.harvest.rpc()
+		hunger = minf(100.0, hunger + HARVEST_HUNGER_RESTORE)
 		return
 
 	var column := _hit_to_column(hit)
@@ -169,6 +210,13 @@ func _dig() -> void:
 func unlock_clock() -> void:
 	has_clock = true
 	clock_label.visible = true
+
+
+# Meme principe que unlock_clock, pour l'outil de recolte (voir la
+# remarque plus haut sur le fait que ca profite a toute l'equipe).
+func unlock_harvest_tool() -> void:
+	has_harvest_tool = true
+	_show_message("Outil de récolte trouvé !")
 
 
 # Construit sur la colonne visee (monte sa hauteur de 1m), si on a un bloc.
@@ -206,6 +254,12 @@ func _update_hud() -> void:
 func _format_time(time_of_day: float) -> String:
 	var total_minutes := int(time_of_day * 24.0 * 60.0)
 	return "%02d:%02d" % [total_minutes / 60, total_minutes % 60]
+
+
+func _show_message(text: String) -> void:
+	message_label.text = text
+	message_label.visible = true
+	get_tree().create_timer(2.0).timeout.connect(func() -> void: message_label.visible = false)
 
 
 # Fait apparaitre le joueur tres haut au-dessus de son point d'atterrissage a

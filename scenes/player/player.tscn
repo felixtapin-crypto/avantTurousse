@@ -49,6 +49,47 @@ offset_bottom = 68.0
 mouse_filter = 2
 text = "--:--"
 
+[node name="HungerBarBg" type="ColorRect" parent="Hud"]
+offset_left = 16.0
+offset_top = 76.0
+offset_right = 166.0
+offset_bottom = 92.0
+mouse_filter = 2
+color = Color(0.15, 0.15, 0.15, 0.8)
+
+[node name="HungerBarFill" type="ColorRect" parent="Hud/HungerBarBg"]
+offset_right = 150.0
+offset_bottom = 16.0
+mouse_filter = 2
+color = Color(0.8, 0.6, 0.2, 1)
+
+[node name="ThirstBarBg" type="ColorRect" parent="Hud"]
+offset_left = 16.0
+offset_top = 100.0
+offset_right = 166.0
+offset_bottom = 116.0
+mouse_filter = 2
+color = Color(0.15, 0.15, 0.15, 0.8)
+
+[node name="ThirstBarFill" type="ColorRect" parent="Hud/ThirstBarBg"]
+offset_right = 150.0
+offset_bottom = 16.0
+mouse_filter = 2
+color = Color(0.2, 0.5, 0.8, 1)
+
+[node name="MessageLabel" type="Label" parent="Hud"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.8
+anchor_right = 0.5
+anchor_bottom = 0.8
+offset_left = -150.0
+offset_right = 150.0
+offset_bottom = 24.0
+mouse_filter = 2
+horizontal_alignment = 1
+text = ""
+
 [node name="Crosshair" type="Control" parent="Hud"]
 anchor_left = 0.5
 anchor_top = 0.5

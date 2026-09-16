@@ -17,9 +17,7 @@ const CollectibleScene := preload("res://scenes/world/collectible.gd")
 var platform: Platform
 
 
-# Retourne le Collectible cree (l'horloge), pour que World puisse s'y
-# raccorder si besoin plus tard.
-func generate(seed_value: int, platform_ref: Platform) -> Node3D:
+func generate(seed_value: int, platform_ref: Platform) -> void:
 	platform = platform_ref
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
@@ -46,13 +44,19 @@ func generate(seed_value: int, platform_ref: Platform) -> Node3D:
 		tree.rotation.y = rng.randf_range(0.0, TAU)
 		add_child(tree)
 
-	if placed.is_empty():
-		return null
+	if placed.size() < 2:
+		return
 
-	# Meme seed -> meme index choisi -> le meme arbre chez tout le monde.
-	var chosen_index := rng.randi_range(0, placed.size() - 1)
-	var chosen_tree := get_child(chosen_index)
-	return _attach_clock(chosen_tree)
+	# Meme seed -> memes index choisis -> les memes arbres chez tout le
+	# monde. Deux index distincts pour ne pas cacher les deux artefacts au
+	# meme endroit.
+	var clock_index := rng.randi_range(0, placed.size() - 1)
+	var tool_index := rng.randi_range(0, placed.size() - 1)
+	while tool_index == clock_index:
+		tool_index = rng.randi_range(0, placed.size() - 1)
+
+	_attach_clock(get_child(clock_index))
+	_attach_harvest_tool(get_child(tool_index))
 
 
 func _is_good_spot(x: float, z: float) -> bool:
@@ -149,3 +153,48 @@ func _attach_clock(tree: Node3D) -> Node3D:
 	clock.position = Vector3(0.5, 0.35, 0.0)
 	tree.add_child(clock)
 	return clock
+
+
+# Outil de recolte (voir DESIGN.md, "Flore et faune"/"Jardinage") : une
+# petite serpe, manche en bois + lame grise, posee contre le tronc.
+func _attach_harvest_tool(tree: Node3D) -> Node3D:
+	var tool := Area3D.new()
+	tool.set_script(CollectibleScene)
+	tool.unlock_method = "unlock_harvest_tool"
+
+	var handle_material := StandardMaterial3D.new()
+	handle_material.albedo_color = Color(0.42, 0.28, 0.15)
+
+	var blade_material := StandardMaterial3D.new()
+	blade_material.albedo_color = Color(0.75, 0.76, 0.78)
+	blade_material.metallic = 0.6
+	blade_material.roughness = 0.3
+
+	var handle := MeshInstance3D.new()
+	var handle_mesh := CylinderMesh.new()
+	handle_mesh.top_radius = 0.03
+	handle_mesh.bottom_radius = 0.03
+	handle_mesh.height = 0.5
+	handle.mesh = handle_mesh
+	handle.material_override = handle_material
+	handle.rotation_degrees = Vector3(0, 0, 70)
+	tool.add_child(handle)
+
+	var blade := MeshInstance3D.new()
+	var blade_mesh := BoxMesh.new()
+	blade_mesh.size = Vector3(0.28, 0.05, 0.09)
+	blade.mesh = blade_mesh
+	blade.material_override = blade_material
+	blade.position = Vector3(0.22, 0.16, 0.0)
+	blade.rotation_degrees = Vector3(0, 0, -30)
+	tool.add_child(blade)
+
+	var area_collision := CollisionShape3D.new()
+	var area_shape := SphereShape3D.new()
+	area_shape.radius = 0.35
+	area_collision.shape = area_shape
+	tool.add_child(area_collision)
+
+	tool.position = Vector3(-0.45, 0.25, 0.15)
+	tree.add_child(tool)
+	return tool
