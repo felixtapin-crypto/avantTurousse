@@ -109,7 +109,7 @@ func _add_sea() -> void:
 func _terrain_material() -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = load("res://scenes/voxel_world/smooth_terrain.gdshader")
-	material.set_shader_parameter("u_albedo_array", SmoothTextureArray.build())
+	material.set_shader_parameter("u_albedo_array", TexturePacks.build(WorldSettings.texture_pack))
 	material.set_shader_parameter("u_texture_scale", 0.15)
 	material.set_shader_parameter("u_roughness", 1.0)
 	material.set_shader_parameter("u_tint_strength", 1.0)
