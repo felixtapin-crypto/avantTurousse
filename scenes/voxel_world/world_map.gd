@@ -228,6 +228,31 @@ func is_cave(x: int, y: int, z: int, depth: int) -> bool:
 		return false
 	return _cave_noise.get_noise_3d(float(x), float(y), float(z)) > CAVE_THRESHOLD
 
+
+# Altitude du sol en flottant, avant arrondi a l'entier.
+#
+# Le rendu en blocs n'a besoin que de l'entier, mais le rendu lisse construit
+# une fonction de distance signee : arrondir d'abord y ferait apparaitre des
+# marches d'escalier de la hauteur d'un voxel, c'est-a-dire exactement ce que
+# le lissage est cense supprimer.
+func terrain_height_f(x: int, z: int) -> float:
+	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
+		return -1.0
+	return _height_f[z * size_xz + x]
+
+
+# Version continue du creusement, pour le rendu lisse.
+#
+# `is_cave()` renvoie un booleen, ce qui convient a une grille de blocs mais
+# donnerait des parois en escalier une fois lissees. Ici on rend la marge au
+# seuil : positive dans le vide, negative dans la roche, et d'autant plus
+# grande qu'on est loin de la paroi. Tres negatif hors de la bande creusable,
+# pour que la grotte n'ait aucun effet la ou elle n'existe pas.
+func cave_sdf(x: int, y: int, z: int, depth: int) -> float:
+	if depth <= CAVE_SURFACE_MARGIN or depth >= CAVE_MAX_DEPTH:
+		return -1000.0
+	return (_cave_noise.get_noise_3d(float(x), float(y), float(z)) - CAVE_THRESHOLD) * 8.0
+
 func terrain_height(x: int, z: int) -> int:
 	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
 		return -1

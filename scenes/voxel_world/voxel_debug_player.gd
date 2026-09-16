@@ -28,6 +28,13 @@ signal edit_refused(reason: String)
 # le long de la normale qu'imposait un raycast physique.
 var voxel_tool: VoxelTool
 
+# En terrain lisse il n'y a plus de bloc a retirer : on sculpte une distance
+# signee a la sphere. C'est une difference de GAMEPLAY, pas seulement de
+# rendu — `DESIGN.md` demande de poser des blocs pour batir un abri, ce qui
+# est nettement moins naturel au pinceau spherique.
+var smooth_mode := false
+var brush_radius := 2.5
+
 var flying := true
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
@@ -108,6 +115,10 @@ func _edit(remove: bool) -> void:
 	if hit == null:
 		return
 
+	if smooth_mode:
+		_sculpt(hit, remove)
+		return
+
 	# `position` est le voxel touche, `previous_position` le vide juste avant
 	# lui le long du rayon — exactement ce qu'il faut pour poser un bloc.
 	var cell: Vector3i = hit.position if remove else hit.previous_position
@@ -135,3 +146,21 @@ func _edit(remove: bool) -> void:
 		if current != BlockLibrary.Type.AIR:
 			return
 		voxel_tool.set_voxel(cell, _held_block)
+
+
+# Sculptage en terrain lisse. On ne retire pas un bloc, on ajoute ou retire de
+# la matiere dans une sphere, et le mailleur replace la surface la ou la
+# distance signee change de signe.
+#
+# La bedrock n'est pas protegee ici : le pinceau couvre plusieurs voxels a la
+# fois, donc la refuser bloc par bloc n'aurait pas de sens. En lisse, la bonne
+# facon de la rendre increusable est de borner la distance signee dans le
+# generateur, ce que ce prototype ne fait pas encore.
+func _sculpt(hit, remove: bool) -> void:
+	var center: Vector3 = hit.position
+	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
+	var box := AABB(center - Vector3.ONE * brush_radius, Vector3.ONE * brush_radius * 2.0)
+	if not voxel_tool.is_area_editable(box):
+		edit_refused.emit("Zone pas encore chargee.")
+		return
+	voxel_tool.do_sphere(center, brush_radius)
