@@ -71,3 +71,8 @@ tâches plus petites au fur et à mesure :
   les autres joueurs voient seulement sa position se deplacer (pas encore
   l'engin volant) — a ameliorer plus tard si on veut que tout le monde
   voit l'atterrissage de l'autre.
+- 2026-09-16 — Vraie cause du "on passe au travers" trouvee et corrigee :
+  le maillage de collision genere (trimesh) ne collisionnait que d'un
+  seul cote (`backface_collision`), et c'etait le mauvais. Force a `true`
+  dans `platform.gd`. Ajout au passage de parois de falaise sur le
+  pourtour de l'ile (donne du volume, plus juste un feuillet plat).
