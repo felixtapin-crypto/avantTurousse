@@ -17,14 +17,14 @@ extends Control
 
 const RENDER = preload("res://scenes/voxel_world/map_render.gd")
 
-# Palette : nuit oceanique, encre parcheminee, or de sable, lagon. On evite le
-# gris neutre, qui ferait outil de debug plutot qu'ecran de jeu.
-const BG := Color("#0b1a1f")
-const BG_SOFT := Color("#122a31")
-const INK := Color("#f0e6d2")
-const GOLD := Color("#e0a542")
-const LAGOON := Color("#4fb3a5")
-const CORAL := Color("#e2725b")
+# Palette et assembleurs communs avec le menu des mondes : voir `island_ui.gd`.
+# Les noms courts restent locaux, les valeurs ne sont plus recopiees.
+const BG := IslandUI.BG
+const BG_SOFT := IslandUI.BG_SOFT
+const INK := IslandUI.INK
+const GOLD := IslandUI.GOLD
+const LAGOON := IslandUI.LAGOON
+const CORAL := IslandUI.CORAL
 
 const SIZES := [300, 450, 600, 800]
 
@@ -77,6 +77,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.is_pressed() and not event.is_echo():
 		if (event as InputEventKey).keycode == KEY_F10:
 			get_tree().quit()
+		elif (event as InputEventKey).keycode == KEY_ESCAPE and not _seed_edit.has_focus():
+			# Echap revient au menu, SAUF pendant une saisie de graine : la, il
+			# sert deja a abandonner ce qu on tape.
+			_cancel_pending()
+			get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn")
 
 
 func _ready() -> void:
@@ -208,6 +213,11 @@ func _build_side_column() -> Control:
 
 	var seed_row := HBoxContainer.new()
 	seed_row.add_theme_constant_override("separation", 6)
+	var back := _pill("Retour")
+	back.pressed.connect(func():
+		_cancel_pending()
+		get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn"))
+	seed_row.add_child(back)
 	var reroll := _pill("Au hasard")
 	reroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reroll.pressed.connect(_on_reroll)
@@ -342,73 +352,40 @@ func _build_side_column() -> Control:
 
 
 # --- Petits assembleurs ----------------------------------------------------
+#
+# Tous delegues a `IslandUI` : les deux ecrans d avant-partie doivent se
+# ressembler exactement, et deux copies auraient derive.
 
 func _label(text: String, size: int, color: Color) -> Label:
-	var node := Label.new()
-	node.text = text
-	node.add_theme_font_size_override("font_size", size)
-	node.add_theme_color_override("font_color", color)
-	return node
+	return IslandUI.label(text, size, color)
 
 
 func _caption(text: String) -> Label:
-	return _label(text, 11, Color(INK, 0.40))
+	return IslandUI.caption(text)
 
 
 func _gap(height: int) -> Control:
-	var node := Control.new()
-	node.custom_minimum_size = Vector2(0, height)
-	return node
+	return IslandUI.gap(height)
 
 
 func _flat(color: Color, radius: int) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = color
-	style.set_corner_radius_all(radius)
-	style.set_content_margin_all(8)
-	return style
+	return IslandUI.flat(color, radius)
 
 
-# Bouton plat facon pastille, sans le relief du theme par defaut : c'est ce
-# qui distingue le plus une interface de jeu d'un panneau d'editeur.
-# Bouton d'action pleine largeur. La couleur DIT ce que fait le bouton : le
-# lagon pour rester sur cet ecran, l'or pour en partir.
-func _action_button(text: String, color: Color) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.custom_minimum_size = Vector2(0, 46)
-	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.add_theme_font_size_override("font_size", 16)
-	for state in ["font_color", "font_hover_color", "font_pressed_color"]:
-		button.add_theme_color_override(state, BG)
-	# Un bouton desactive doit se lire comme tel sans qu'on ait a le cliquer :
-	# fond eteint et texte efface, pas seulement une teinte un peu differente.
-	button.add_theme_color_override("font_disabled_color", Color(INK, 0.30))
-	button.add_theme_stylebox_override("normal", _flat(color, 4))
-	button.add_theme_stylebox_override("hover", _flat(color.lightened(0.12), 4))
-	button.add_theme_stylebox_override("pressed", _flat(color.darkened(0.15), 4))
-	button.add_theme_stylebox_override("disabled", _flat(Color(INK, 0.07), 4))
-	return button
+func _bar(color: Color) -> StyleBoxFlat:
+	return IslandUI.bar(color)
 
 
 func _pill(text: String) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.focus_mode = Control.FOCUS_NONE
-	button.add_theme_font_size_override("font_size", 13)
-	button.add_theme_color_override("font_color", Color(INK, 0.70))
-	button.add_theme_color_override("font_hover_color", INK)
-	button.add_theme_color_override("font_pressed_color", INK)
-	button.add_theme_stylebox_override("normal", _flat(Color(INK, 0.07), 4))
-	button.add_theme_stylebox_override("hover", _flat(Color(INK, 0.15), 4))
-	button.add_theme_stylebox_override("pressed", _flat(Color(LAGOON, 0.35), 4))
-	return button
+	return IslandUI.pill(text)
+
+
+func _action_button(text: String, color: Color) -> Button:
+	return IslandUI.action_button(text, color)
 
 
 func _mark_selected(button: Button, selected: bool) -> void:
-	button.add_theme_stylebox_override("normal",
-		_flat(Color(LAGOON, 0.30) if selected else Color(INK, 0.07), 4))
-	button.add_theme_color_override("font_color", INK if selected else Color(INK, 0.70))
+	IslandUI.mark_selected(button, selected)
 
 
 # --- Actions ---------------------------------------------------------------
@@ -666,14 +643,6 @@ func _biome_row(biome: int, share: float) -> Control:
 
 	row.add_child(stack)
 	return row
-
-
-func _bar(color: Color) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = color
-	style.set_corner_radius_all(2)
-	style.set_content_margin_all(0)
-	return style
 
 
 func _refresh_cache_label() -> void:

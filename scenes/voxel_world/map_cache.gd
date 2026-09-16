@@ -40,6 +40,9 @@ const FORMAT_VERSION := 1
 # pese une dizaine de Mo : sans plafond, un apres-midi de calibrage remplirait
 # le disque d'etats intermediaires dont plus rien ne se sert.
 const MAX_ENTRIES := 12
+# Cote de la vignette ecrite a cote de chaque carte, en pixels.
+const THUMBNAIL_SIZE := 256
+const MapRender = preload("res://scenes/voxel_world/map_render.gd")
 
 static var _last_was_cached := false
 
@@ -95,6 +98,68 @@ static func parameters_hash() -> int:
 	return hash("\n".join(parts))
 
 
+# Les cartes en cache, la plus recente d'abord.
+#
+# Tout se lit dans le NOM du fichier : empreinte, seed, taille, hauteur. Aucune
+# entree n'est ouverte — une carte de 800 pese une vingtaine de Mo, et le menu
+# en afficherait douze.
+#
+# `current` dit si l'entree correspond aux reglages de generation ACTUELS. Une
+# entree perimee n'est pas supprimee pour autant : elle sera balayee par le
+# plafond, et la voir explique pourquoi une carte connue ne se recharge pas.
+static func entries() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var dir := DirAccess.open(CACHE_DIR)
+	if dir == null:
+		return out
+
+	var wanted := parameters_hash() & 0xffffffff
+	for name in _entries(dir):
+		# "<empreinte>_<seed>_<taille>x<hauteur>.bin"
+		var parts := name.get_basename().split("_")
+		if parts.size() != 3:
+			continue
+		var dimensions := parts[2].split("x")
+		if dimensions.size() != 2:
+			continue
+		var path := "%s/%s" % [CACHE_DIR, name]
+		out.append({
+			"seed": int(parts[1]),
+			"size": int(dimensions[0]),
+			"height": int(dimensions[1]),
+			"current": parts[0].hex_to_int() == wanted,
+			"path": path,
+			"thumbnail": path.get_basename() + ".png",
+			"modified": FileAccess.get_modified_time(path),
+		})
+
+	out.sort_custom(func(a, b): return int(a["modified"]) > int(b["modified"]))
+	return out
+
+
+# Vignette d'une entree, rendue a la demande si elle manque.
+#
+# Elle est ecrite a cote de la carte au moment de la mise en cache, mais les
+# entrees anterieures a cette fonctionnalite n'en ont pas — et une carte
+# perimee ne peut plus etre relue pour en produire une. On rend alors `null`,
+# et le menu affiche une vignette vide plutot que de refuser l'entree.
+static func thumbnail(entry: Dictionary) -> Texture2D:
+	var path: String = entry["thumbnail"]
+	if FileAccess.file_exists(path):
+		var image := Image.new()
+		if image.load(path) == OK:
+			return ImageTexture.create_from_image(image)
+	if not bool(entry["current"]):
+		return null
+
+	var map := _read(entry["path"], int(entry["seed"]), int(entry["size"]),
+		int(entry["height"]))
+	if map == null:
+		return null
+	_write_thumbnail(entry["path"], map)
+	return ImageTexture.create_from_image(_thumbnail_image(map))
+
+
 static func entry_count() -> int:
 	var dir := DirAccess.open(CACHE_DIR)
 	if dir == null:
@@ -108,6 +173,7 @@ static func clear() -> void:
 		return
 	for entry in _entries(dir):
 		dir.remove(entry)
+		dir.remove(entry.get_basename() + ".png")
 	_last_was_cached = false
 
 
@@ -163,6 +229,7 @@ static func _write(path: String, map: WorldMap) -> void:
 	file.store_var(data)
 	file.close()
 
+	_write_thumbnail(path, map)
 	_enforce_limit()
 
 
@@ -193,4 +260,26 @@ static func _enforce_limit() -> void:
 	dated.sort_custom(func(a, b): return a["time"] < b["time"])
 
 	for i in range(dated.size() - MAX_ENTRIES):
-		dir.remove(dated[i]["name"])
+		var name: String = dated[i]["name"]
+		dir.remove(name)
+		# La vignette part avec sa carte, sinon le dossier se remplit
+		# d apercus de mondes qui n existent plus.
+		dir.remove(name.get_basename() + ".png")
+
+
+# Vignette ecrite a cote de la carte, pour que le menu des mondes n'ait pas a
+# ouvrir vingt megaoctets par case affichee.
+#
+# Elle est produite depuis le fil de generation, ce qui ne pose pas de
+# probleme : `MapRender.render` ne lit que la carte, et `Image` n'appartient
+# pas a la scene.
+static func _write_thumbnail(map_path: String, map: WorldMap) -> void:
+	_thumbnail_image(map).save_png(map_path.get_basename() + ".png")
+
+
+static func _thumbnail_image(map: WorldMap) -> Image:
+	# Couche 0 : les biomes. C'est la lecture qui identifie un monde d'un coup
+	# d'oeil — le relief seul, en nuances de gris, se ressemble trop.
+	var image := MapRender.render(map, 0)
+	image.resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, Image.INTERPOLATE_LANCZOS)
+	return image
