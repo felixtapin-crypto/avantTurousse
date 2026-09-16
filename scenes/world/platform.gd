@@ -86,19 +86,22 @@ func _quad_valid(x: int, z: int) -> bool:
 
 
 func _add_quad(surface: SurfaceTool, p00: Vector3, p01: Vector3, p10: Vector3, p11: Vector3) -> void:
+	# Ordre choisi empiriquement : l'ordre "logique" (p00,p01,p10) donnait un
+	# maillage dont la face visible/eclairee etait celle du dessous vue d'en
+	# haut. Godot considere donc l'autre sens comme face avant ici.
 	surface.set_uv(Vector2(0, 0))
 	surface.add_vertex(p00)
-	surface.set_uv(Vector2(0, 1))
-	surface.add_vertex(p01)
 	surface.set_uv(Vector2(1, 0))
 	surface.add_vertex(p10)
+	surface.set_uv(Vector2(0, 1))
+	surface.add_vertex(p01)
 
 	surface.set_uv(Vector2(1, 0))
 	surface.add_vertex(p10)
-	surface.set_uv(Vector2(0, 1))
-	surface.add_vertex(p01)
 	surface.set_uv(Vector2(1, 1))
 	surface.add_vertex(p11)
+	surface.set_uv(Vector2(0, 1))
+	surface.add_vertex(p01)
 
 
 # Paroi verticale entre deux points du bord (haut) et le meme point ramene a
@@ -154,6 +157,11 @@ func _build_mesh() -> void:
 
 	var material := StandardMaterial3D.new()
 	material.albedo_color = Color(0.35, 0.55, 0.25)
+	# Les parois de falaise n'ont pas toutes le meme sens de rotation (4
+	# orientations differentes generees par le meme code) ; plutot que de
+	# determiner le bon sens au cas par cas, on desactive le culling pour
+	# garantir que tout reste visible quel que soit le sens des triangles.
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = array_mesh
