@@ -22,23 +22,30 @@ const LAYERS: Array[Dictionary] = [
 	{"name": "Continentalite", "id": "continentality"},
 ]
 
-const SEA_DEEP := Color(0.05, 0.13, 0.28)
-const SEA_SHALLOW := Color(0.16, 0.40, 0.62)
+const SEA_DEEP := Color("#0a1e33")
+const SEA_SHALLOW := Color("#2e7ba6")
 
-# Teintes du jeu pour les biomes emerges, afin que la carte et le monde se
-# ressemblent. La foret est assombrie pour se distinguer de la prairie, que
-# les blocs rendent pourtant identiques.
+# Teintes de la carte.
+#
+# Elles s'ecartent volontairement des couleurs du terrain : en jeu, prairie et
+# foret partagent la meme herbe, plage et desert le meme sable, rocaille et
+# eboulis la meme pierre. Reprendre ces teintes telles quelles rendrait la
+# carte illisible la ou elle doit justement servir a distinguer.
+#
+# Les paires sont donc ecartees deux a deux — deux bleus, deux sables, deux
+# verts, deux gris — en gardant la famille pour que la lecture reste
+# intuitive : un desert reste sable, une foret reste verte.
 const BIOME_COLOR: Dictionary = {
 	WorldMap.Biome.DEEP_SEA: SEA_DEEP,
 	WorldMap.Biome.SHALLOW_SEA: SEA_SHALLOW,
-	WorldMap.Biome.BEACH: Color(0.808, 0.600, 0.396),
-	WorldMap.Biome.RIVER: Color(0.30, 0.68, 0.92),
-	WorldMap.Biome.DESERT: Color(0.890, 0.745, 0.557),
-	WorldMap.Biome.PLAINS: Color(0.20, 0.62, 0.36),
-	WorldMap.Biome.FOREST: Color(0.09, 0.38, 0.21),
-	WorldMap.Biome.ROCK: Color(0.365, 0.392, 0.408),
-	WorldMap.Biome.SCREE: Color(0.52, 0.53, 0.52),
-	WorldMap.Biome.SNOW: Color(0.90, 0.92, 0.94),
+	WorldMap.Biome.RIVER: Color("#5ad0f0"),
+	WorldMap.Biome.BEACH: Color("#e8c98a"),
+	WorldMap.Biome.DESERT: Color("#dba24a"),
+	WorldMap.Biome.PLAINS: Color("#4a9e45"),
+	WorldMap.Biome.FOREST: Color("#1d5c2e"),
+	WorldMap.Biome.SCREE: Color("#a8a095"),
+	WorldMap.Biome.ROCK: Color("#6e6558"),
+	WorldMap.Biome.SNOW: Color("#f2f6f8"),
 }
 
 

@@ -1,95 +1,294 @@
 extends Control
 
-# Ecran d'apercu de carte, avant lancement de la partie.
+# Ecran de generation du monde, avant la partie.
 #
 # Le but n'est pas decoratif. Toute la generation a ete calibree a l'aveugle,
-# en comptant des colonnes dans un script de verification : c'est ainsi qu'on
-# a decouvert que le desert etait litteralement impossible (temperature et
-# humidite anti-correlees) et que la neige ne sortait jamais. Un rendu 2D des
-# champs rend ces reglages VISIBLES, et permet de juger une seed avant d'y
-# passer une partie.
+# en comptant des colonnes dans un script de verification : c'est comme ca
+# qu'on a decouvert que le desert etait litteralement impossible (temperature
+# et humidite anti-correlees) et que la neige ne sortait jamais. Un rendu 2D
+# des champs rend ces reglages VISIBLES, et permet de juger une seed avant d'y
+# passer une partie — ce que reclame le pilier "chaque partie est differente"
+# de DESIGN.md.
 #
-# C'est aussi ce que reclame le pilier "chaque partie est differente" de
-# DESIGN.md : pouvoir regarder le monde tire avant de s'y engager.
+# L'interface est construite EN CODE plutot qu'en .tscn. Deux raisons : le
+# style repose sur des StyleBox et des opacites graduees, penibles a relire
+# dans un fichier de scene ; et les barres de biomes sont produites a partir
+# des donnees, donc leur nombre n'est pas connu d'avance.
 
 const RENDER = preload("res://scenes/voxel_world/map_render.gd")
 
-@onready var _preview: TextureRect = %Preview
-@onready var _layer_list: ItemList = %LayerList
-@onready var _seed_spin: SpinBox = %SeedSpin
-@onready var _size_option: OptionButton = %SizeOption
-@onready var _stats: RichTextLabel = %Stats
-@onready var _legend: RichTextLabel = %Legend
-@onready var _status: Label = %Status
+# Palette : nuit oceanique, encre parcheminee, or de sable, lagon. On evite le
+# gris neutre, qui ferait outil de debug plutot qu'ecran de jeu.
+const BG := Color("#0b1a1f")
+const BG_SOFT := Color("#122a31")
+const INK := Color("#f0e6d2")
+const GOLD := Color("#e0a542")
+const LAGOON := Color("#4fb3a5")
+const CORAL := Color("#e2725b")
 
 const SIZES := [300, 450, 600, 800]
 
 var _map: WorldMap
 var _layer := 0
+var _busy := false
+
+var _preview: TextureRect
+var _legend: RichTextLabel
+var _status: Label
+var _seed_label: Label
+var _land_value: Label
+var _layer_buttons: Array[Button] = []
+var _size_buttons: Array[Button] = []
+var _biome_rows: VBoxContainer
+var _play_button: Button
 
 
 func _ready() -> void:
-	for size in SIZES:
-		_size_option.add_item("%d x %d" % [size, size])
-	_size_option.select(SIZES.find(WorldSettings.size))
-	_seed_spin.value = WorldSettings.seed_value
-
-	for entry in RENDER.LAYERS:
-		_layer_list.add_item(entry["name"])
-	_layer_list.select(0)
-
+	_build_ui()
 	_regenerate()
 
 
-func _on_generate_pressed() -> void:
-	_regenerate()
+# --- Construction de l'interface ------------------------------------------
+
+func _build_ui() -> void:
+	var background := ColorRect.new()
+	background.color = BG
+	background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(background)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 28)
+	add_child(margin)
+
+	var columns := HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 28)
+	margin.add_child(columns)
+
+	columns.add_child(_build_map_column())
+	columns.add_child(_build_side_column())
 
 
-func _on_random_seed_pressed() -> void:
-	_seed_spin.value = randi() % 1000000
-	_regenerate()
+func _build_map_column() -> Control:
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_theme_constant_override("separation", 14)
+
+	var header := HBoxContainer.new()
+	header.add_child(_label("AVANT TOUROUSSE", 13, Color(INK, 0.45)))
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+	_status = _label("", 13, Color(LAGOON, 0.9))
+	header.add_child(_status)
+	column.add_child(header)
+
+	# La carte est encadree d'un liseré discret : elle doit se lire comme une
+	# piece posee sur la table, pas comme un widget colle au fond.
+	var frame := PanelContainer.new()
+	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var frame_style := StyleBoxFlat.new()
+	frame_style.bg_color = BG_SOFT
+	frame_style.set_corner_radius_all(6)
+	frame_style.set_border_width_all(1)
+	frame_style.border_color = Color(INK, 0.12)
+	frame_style.set_content_margin_all(10)
+	frame.add_theme_stylebox_override("panel", frame_style)
+
+	_preview = TextureRect.new()
+	_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	frame.add_child(_preview)
+	column.add_child(frame)
+
+	var layer_bar := HBoxContainer.new()
+	layer_bar.add_theme_constant_override("separation", 6)
+	for i in RENDER.LAYERS.size():
+		var button := _pill(RENDER.LAYERS[i]["name"])
+		var index := i
+		button.pressed.connect(func(): _select_layer(index))
+		_layer_buttons.append(button)
+		layer_bar.add_child(button)
+	column.add_child(layer_bar)
+
+	_legend = RichTextLabel.new()
+	_legend.bbcode_enabled = true
+	_legend.fit_content = true
+	_legend.scroll_active = false
+	_legend.custom_minimum_size = Vector2(0, 46)
+	_legend.add_theme_color_override("default_color", Color(INK, 0.62))
+	_legend.add_theme_font_size_override("normal_font_size", 13)
+	column.add_child(_legend)
+
+	return column
 
 
-func _on_layer_list_item_selected(index: int) -> void:
+func _build_side_column() -> Control:
+	var side := VBoxContainer.new()
+	side.custom_minimum_size = Vector2(320, 0)
+	side.add_theme_constant_override("separation", 10)
+
+	side.add_child(_caption("SEED"))
+	_seed_label = _label("1", 46, INK)
+	side.add_child(_seed_label)
+
+	var seed_row := HBoxContainer.new()
+	seed_row.add_theme_constant_override("separation", 6)
+	var reroll := _pill("Tirer une autre seed")
+	reroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reroll.pressed.connect(_on_reroll)
+	seed_row.add_child(reroll)
+	var again := _pill("Relancer")
+	again.pressed.connect(func(): _regenerate())
+	seed_row.add_child(again)
+	side.add_child(seed_row)
+
+	side.add_child(_gap(10))
+	side.add_child(_caption("ETENDUE DU MONDE"))
+	var size_row := HBoxContainer.new()
+	size_row.add_theme_constant_override("separation", 6)
+	for i in SIZES.size():
+		var button := _pill("%d" % SIZES[i])
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var index := i
+		button.pressed.connect(func(): _select_size(index))
+		_size_buttons.append(button)
+		size_row.add_child(button)
+	side.add_child(size_row)
+
+	side.add_child(_gap(10))
+	side.add_child(_caption("TERRES EMERGEES"))
+	_land_value = _label("—", 34, LAGOON)
+	side.add_child(_land_value)
+
+	side.add_child(_gap(10))
+	side.add_child(_caption("BIOMES"))
+	_biome_rows = VBoxContainer.new()
+	_biome_rows.add_theme_constant_override("separation", 7)
+	_biome_rows.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side.add_child(_biome_rows)
+
+	_play_button = Button.new()
+	_play_button.text = "Explorer ce monde"
+	_play_button.custom_minimum_size = Vector2(0, 46)
+	_play_button.add_theme_font_size_override("font_size", 16)
+	_play_button.add_theme_color_override("font_color", BG)
+	_play_button.add_theme_color_override("font_hover_color", BG)
+	_play_button.add_theme_color_override("font_pressed_color", BG)
+	_play_button.add_theme_stylebox_override("normal", _flat(GOLD, 4))
+	_play_button.add_theme_stylebox_override("hover", _flat(GOLD.lightened(0.12), 4))
+	_play_button.add_theme_stylebox_override("pressed", _flat(GOLD.darkened(0.15), 4))
+	_play_button.pressed.connect(_on_play)
+	side.add_child(_play_button)
+
+	_select_size(SIZES.find(WorldSettings.size))
+	return side
+
+
+# --- Petits assembleurs ----------------------------------------------------
+
+func _label(text: String, size: int, color: Color) -> Label:
+	var node := Label.new()
+	node.text = text
+	node.add_theme_font_size_override("font_size", size)
+	node.add_theme_color_override("font_color", color)
+	return node
+
+
+func _caption(text: String) -> Label:
+	return _label(text, 11, Color(INK, 0.40))
+
+
+func _gap(height: int) -> Control:
+	var node := Control.new()
+	node.custom_minimum_size = Vector2(0, height)
+	return node
+
+
+func _flat(color: Color, radius: int) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.set_corner_radius_all(radius)
+	style.set_content_margin_all(8)
+	return style
+
+
+# Bouton plat facon pastille, sans le relief du theme par defaut : c'est ce
+# qui distingue le plus une interface de jeu d'un panneau d'editeur.
+func _pill(text: String) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.focus_mode = Control.FOCUS_NONE
+	button.add_theme_font_size_override("font_size", 13)
+	button.add_theme_color_override("font_color", Color(INK, 0.70))
+	button.add_theme_color_override("font_hover_color", INK)
+	button.add_theme_color_override("font_pressed_color", INK)
+	button.add_theme_stylebox_override("normal", _flat(Color(INK, 0.07), 4))
+	button.add_theme_stylebox_override("hover", _flat(Color(INK, 0.15), 4))
+	button.add_theme_stylebox_override("pressed", _flat(Color(LAGOON, 0.35), 4))
+	return button
+
+
+func _mark_selected(button: Button, selected: bool) -> void:
+	button.add_theme_stylebox_override("normal",
+		_flat(Color(LAGOON, 0.30) if selected else Color(INK, 0.07), 4))
+	button.add_theme_color_override("font_color", INK if selected else Color(INK, 0.70))
+
+
+# --- Actions ---------------------------------------------------------------
+
+func _select_layer(index: int) -> void:
 	_layer = index
+	for i in _layer_buttons.size():
+		_mark_selected(_layer_buttons[i], i == index)
 	_refresh_image()
 
 
-func _on_play_blocky_pressed() -> void:
-	_play("res://scenes/voxel_world/godot_voxel_world.tscn")
+func _select_size(index: int) -> void:
+	if index < 0:
+		index = SIZES.find(600)
+	WorldSettings.size = SIZES[index]
+	for i in _size_buttons.size():
+		_mark_selected(_size_buttons[i], i == index)
 
 
-func _on_play_smooth_pressed() -> void:
-	_play("res://scenes/voxel_world/smooth_voxel_world.tscn")
+func _on_reroll() -> void:
+	WorldSettings.seed_value = randi() % 1000000
+	_regenerate()
 
 
-func _play(scene_path: String) -> void:
-	if _map == null:
+func _on_play() -> void:
+	if _map == null or _busy:
 		return
-	WorldSettings.seed_value = int(_seed_spin.value)
-	WorldSettings.size = SIZES[_size_option.selected]
-	# La carte affichee est passee telle quelle a la scene de jeu : elle a
-	# deja coute son temps de calcul, et la regenerer donnerait exactement le
-	# meme resultat pour rien.
+	# La carte affichee part telle quelle : elle a deja coute son calcul, et la
+	# regenerer donnerait exactement le meme resultat.
 	WorldSettings.prepared_map = _map
-	get_tree().change_scene_to_file(scene_path)
+	get_tree().change_scene_to_file("res://scenes/voxel_world/smooth_voxel_world.tscn")
 
 
 func _regenerate() -> void:
-	var size: int = SIZES[_size_option.selected]
-	_status.text = "Generation de la carte %d x %d..." % [size, size]
-	# Laisse une frame au libelle pour s'afficher : la generation est
-	# synchrone et fige la fenetre plusieurs secondes.
+	if _busy:
+		return
+	_busy = true
+	_play_button.disabled = true
+	_seed_label.text = str(WorldSettings.seed_value)
+	_status.text = "Generation du monde %d x %d..." % [WorldSettings.size, WorldSettings.size]
+	# Une frame pour que le libelle s'affiche : la generation est synchrone et
+	# fige la fenetre plusieurs secondes.
 	await get_tree().process_frame
 
 	var started := Time.get_ticks_msec()
-	_map = WorldMap.new(size, WorldSettings.height)
-	_map.generate(int(_seed_spin.value))
+	_map = WorldMap.new(WorldSettings.size, WorldSettings.height)
+	_map.generate(WorldSettings.seed_value)
 	var elapsed := Time.get_ticks_msec() - started
 
-	_refresh_image()
-	_refresh_stats(elapsed)
-	_status.text = "Carte generee en %d ms" % elapsed
+	_select_layer(_layer)
+	_refresh_stats()
+	_status.text = "Monde genere en %d ms" % elapsed
+	_play_button.disabled = false
+	_busy = false
 
 
 func _refresh_image() -> void:
@@ -99,47 +298,29 @@ func _refresh_image() -> void:
 	_legend.text = RENDER.legend(_layer)
 
 
-func _refresh_stats(elapsed_ms: int) -> void:
+func _refresh_stats() -> void:
+	for child in _biome_rows.get_children():
+		child.queue_free()
+
 	var counts := {}
 	var land := 0
-	var t_min := INF
-	var t_max := -INF
-	var m_min := INF
-	var m_max := -INF
-
 	for z in _map.size_xz:
 		for x in _map.size_xz:
-			var b := _map.biome_at(x, z)
-			counts[b] = int(counts.get(b, 0)) + 1
-			if _map.terrain_height(x, z) <= WorldMap.SEA_LEVEL:
-				continue
-			land += 1
-			var t := _map.temperature_at(x, z)
-			var m := _map.moisture_at(x, z)
-			t_min = minf(t_min, t)
-			t_max = maxf(t_max, t)
-			m_min = minf(m_min, m)
-			m_max = maxf(m_max, m)
+			var biome := _map.biome_at(x, z)
+			counts[biome] = int(counts.get(biome, 0)) + 1
+			if _map.terrain_height(x, z) > WorldMap.SEA_LEVEL:
+				land += 1
 
 	var total := _map.size_xz * _map.size_xz
-	var lines := PackedStringArray()
-	lines.append("[b]Carte[/b]  %d x %d · seed %d · %d ms" % [
-		_map.size_xz, _map.size_xz, int(_seed_spin.value), elapsed_ms])
-	lines.append("[b]Terres emergees[/b]  %.1f %% (%d colonnes)" % [
-		100.0 * float(land) / float(total), land])
-	if land > 0:
-		lines.append("[b]Temperature[/b]  %.2f .. %.2f" % [t_min, t_max])
-		lines.append("[b]Humidite[/b]  %.2f .. %.2f" % [m_min, m_max])
-	lines.append("")
-	lines.append("[b]Biomes[/b] (part des terres)")
+	_land_value.text = "%.0f %% de la carte" % (100.0 * float(land) / float(total))
 
 	var ordered := counts.keys()
 	ordered.sort_custom(func(a, b): return counts[a] > counts[b])
-	for b in ordered:
-		if b == WorldMap.Biome.DEEP_SEA or b == WorldMap.Biome.SHALLOW_SEA:
+	for biome in ordered:
+		if biome == WorldMap.Biome.DEEP_SEA or biome == WorldMap.Biome.SHALLOW_SEA:
 			continue
-		var share := 100.0 * float(counts[b]) / float(maxi(land, 1))
-		lines.append("  %-12s %5.1f %%" % [_map.biome_name(b), share])
+		var share := float(counts[biome]) / float(maxi(land, 1))
+		_biome_rows.add_child(_biome_row(biome, share))
 
 	# Un biome present dans le code mais absent de la carte est un seuil mal
 	# calibre, pas une fonctionnalite : autant le dire ici plutot que de le
@@ -150,8 +331,49 @@ func _refresh_stats(elapsed_ms: int) -> void:
 		if int(counts.get(required, 0)) == 0:
 			missing.append(_map.biome_name(required))
 	if missing.size() > 0:
-		lines.append("")
-		lines.append("[color=#e08040][b]Absents de cette carte :[/b] %s[/color]"
-			% ", ".join(missing))
+		_biome_rows.add_child(_gap(6))
+		_biome_rows.add_child(_label("Absents : " + ", ".join(missing), 12, CORAL))
 
-	_stats.text = "\n".join(lines)
+
+# Une ligne de biome : nom, part, et une barre fine. La barre vaut mieux qu'un
+# pourcentage seul — elle rend comparables d'un coup d'oeil des biomes qui
+# vont de 22 % a 0,3 %.
+func _biome_row(biome: int, share: float) -> Control:
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 3)
+
+	var head := HBoxContainer.new()
+	head.add_child(_label(_map.biome_name(biome), 13, Color(INK, 0.85)))
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(spacer)
+	head.add_child(_label("%.1f %%" % (share * 100.0), 13, Color(INK, 0.55)))
+	row.add_child(head)
+
+	var stack := Control.new()
+	stack.custom_minimum_size = Vector2(0, 4)
+
+	var track := PanelContainer.new()
+	track.add_theme_stylebox_override("panel", _bar(Color(INK, 0.12)))
+	track.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stack.add_child(track)
+
+	var fill := PanelContainer.new()
+	fill.add_theme_stylebox_override("panel", _bar(RENDER.BIOME_COLOR.get(biome, INK)))
+	fill.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# La racine ecrase l'echelle : sans elle, tout ce qui est sous 5 % devient
+	# un trait invisible a cote de la prairie, alors que c'est justement la
+	# que se joue la question "ce biome sort-il vraiment ?".
+	fill.anchor_right = clampf(sqrt(share), 0.02, 1.0)
+	stack.add_child(fill)
+
+	row.add_child(stack)
+	return row
+
+
+func _bar(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.set_corner_radius_all(2)
+	style.set_content_margin_all(0)
+	return style

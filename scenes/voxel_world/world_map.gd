@@ -156,9 +156,18 @@ const SHADOW_SCALE := 11.0        # denivele au vent au-dela duquel l'ombre satu
 # --- Seuils de biome -------------------------------------------------------
 const DEEP_SEA_DEPTH := 6
 const BEACH_BAND := 4             # hauteur de plage au-dessus du niveau de la mer
-const BEACH_MAX_SLOPE := 1        # au-dela, la cote est une falaise, pas une plage
-const SLOPE_ROCK := 3
-const SLOPE_SCREE := 2
+# Seuils de pente, en voxels de denivele par voxel parcouru, mesures sur
+# l'altitude FLOTTANTE et non sur l'entier.
+#
+# L'entier ne marchait pas, pour deux raisons. Il quantifie brutalement : tout
+# ce qui est entre deux marches tombe dans la meme classe, donc un seuil a 3
+# demandait 71 degres, une paroi que presque rien n'atteint. Et surtout, plus
+# la carte est grande, plus les bassins versants sont vastes, donc plus
+# l'incision fluviale est forte et plus les pentes s'adoucissent : la rocaille
+# sortait a 300 et disparaissait a 600, pour un code inchange.
+const BEACH_MAX_SLOPE := 0.6      # au-dela, la cote est une falaise, pas une plage
+const SLOPE_ROCK := 1.5
+const SLOPE_SCREE := 0.9
 const TEMP_SNOW := 0.30           # en-dessous : neige
 const TEMP_DESERT := 0.56         # au-dessus, et sec : desert
 const MOIST_DESERT := 0.38
@@ -650,7 +659,7 @@ func _classify(seed_value: int) -> void:
 			_temperature[i] = temp
 			_moisture[i] = moist
 			_heights[i] = height
-			_biomes[i] = _biome_for(height, _slope_i(i, height), temp, moist, is_river)
+			_biomes[i] = _biome_for(height, _slope_f(i), temp, moist, is_river)
 
 
 # Debit a partir duquel une colonne porte une riviere, choisi comme quantile
@@ -693,33 +702,15 @@ func _river_threshold() -> float:
 	return INF
 
 
-# Pente en voxels entiers, calculee sur les altitudes definitives.
-func _slope_i(i: int, height: int) -> int:
-	var x := i % size_xz
-	@warning_ignore("integer_division")
-	var z := i / size_xz
-	var worst := 0
-	if x > 0:
-		worst = maxi(worst, absi(int(round(_height_f[i - 1])) - height))
-	if x < size_xz - 1:
-		worst = maxi(worst, absi(int(round(_height_f[i + 1])) - height))
-	if z > 0:
-		worst = maxi(worst, absi(int(round(_height_f[i - size_xz])) - height))
-	if z < size_xz - 1:
-		worst = maxi(worst, absi(int(round(_height_f[i + size_xz])) - height))
-	return worst
-
-
 # Croisement climat x altitude x pente, facon diagramme de Whittaker mais
-# restreint aux blocs que KayKit Block Bits fournit reellement : pas de
-# marecage, de jungle ni de savane, faute de blocs pour les rendre credibles
-# (voir issue #30).
+# restreint aux matieres que le terrain sait rendre : pas de marecage, de
+# jungle ni de savane, faute de quoi les distinguer a l'oeil (voir issue #30).
 #
 # L'ordre des tests compte : la pente l'emporte sur le climat, parce qu'une
 # paroi raide est de la roche nue qu'elle soit gelee ou brulante — c'est la
 # regle heritee de Terrain3D, et celle qui fait qu'une falaise ressemble a
 # une falaise plutot qu'a une prairie verticale.
-func _biome_for(height: int, slope: int, temp: float, moist: float, is_river: bool) -> int:
+func _biome_for(height: int, slope: float, temp: float, moist: float, is_river: bool) -> int:
 	if is_river:
 		return Biome.RIVER
 	if height < SEA_LEVEL - DEEP_SEA_DEPTH:
@@ -746,21 +737,21 @@ func _biome_for(height: int, slope: int, temp: float, moist: float, is_river: bo
 func surface_block(biome: int) -> int:
 	match biome:
 		Biome.DEEP_SEA:
-			return BlockLibrary.Type.GRAVEL
+			return TerrainMaterials.Type.GRAVEL
 		Biome.SHALLOW_SEA, Biome.BEACH:
-			return BlockLibrary.Type.SAND
+			return TerrainMaterials.Type.SAND
 		Biome.RIVER:
-			return BlockLibrary.Type.GRAVEL
+			return TerrainMaterials.Type.GRAVEL
 		Biome.DESERT:
-			return BlockLibrary.Type.SAND_PALE
+			return TerrainMaterials.Type.SAND_PALE
 		Biome.ROCK:
-			return BlockLibrary.Type.STONE
+			return TerrainMaterials.Type.STONE
 		Biome.SCREE:
-			return BlockLibrary.Type.GRAVEL
+			return TerrainMaterials.Type.GRAVEL
 		Biome.SNOW:
-			return BlockLibrary.Type.SNOW
+			return TerrainMaterials.Type.SNOW
 		_:
-			return BlockLibrary.Type.GRASS
+			return TerrainMaterials.Type.GRASS
 
 
 # Couche meuble sous la surface d'un biome : (type de bloc, epaisseur).
@@ -769,10 +760,10 @@ func sub_surface(biome: int) -> Vector2i:
 	match biome:
 		Biome.DESERT:
 			# Une dune est du sable sur une bonne epaisseur, pas un voile.
-			return Vector2i(BlockLibrary.Type.SAND_PALE, DESERT_SAND_DEPTH)
+			return Vector2i(TerrainMaterials.Type.SAND_PALE, DESERT_SAND_DEPTH)
 		Biome.SHALLOW_SEA, Biome.BEACH:
-			return Vector2i(BlockLibrary.Type.SAND, SAND_DEPTH)
+			return Vector2i(TerrainMaterials.Type.SAND, SAND_DEPTH)
 		Biome.PLAINS, Biome.FOREST:
-			return Vector2i(BlockLibrary.Type.DIRT, DIRT_DEPTH)
+			return Vector2i(TerrainMaterials.Type.DIRT, DIRT_DEPTH)
 		_:
-			return Vector2i(BlockLibrary.Type.STONE, 0)
+			return Vector2i(TerrainMaterials.Type.STONE, 0)

@@ -4,10 +4,11 @@ extends RefCounted
 # Tableau de textures BOUCHON pour le terrain lisse.
 #
 # Le shader lisse echantillonne un `Texture2DArray` en projection triplanaire,
-# une couche par matiere. On n'a pas encore ces textures : le pack KayKit est
-# un nuancier d'aplats, pas un jeu de matieres carrelables (voir issue #30).
+# une couche par matiere. On n'a pas encore ces matieres : la palette dont
+# le projet est parti est un nuancier d'aplats, pas un jeu de textures
+# carrelables (voir issue #30).
 #
-# En attendant, chaque couche est l'aplat KayKit de la matiere, avec un
+# En attendant, chaque couche est l'aplat de la matiere, avec un
 # tramage par pixel de quelques pourcents. Ce tramage est volontairement du
 # bruit blanc et non un motif : il accroche la lumiere sans introduire de
 # basse frequence, donc il reste raccordable sans couture visible — ce qui
@@ -15,7 +16,7 @@ extends RefCounted
 #
 # Le but est de pouvoir juger la FORME du terrain lisse (silhouette, pentes,
 # ombrage) avant d'investir dans de vraies matieres. La liste des textures a
-# fournir est dans l'ordre de `KayKitSmoothGenerator.Layer`.
+# fournir est dans l'ordre de `TerrainGenerator.Layer`.
 
 const SIZE := 64
 const DITHER := 0.05
@@ -24,16 +25,16 @@ const DITHER := 0.05
 static func build() -> Texture2DArray:
 	var layers: Array[Image] = []
 	for type in [
-		BlockLibrary.Type.GRASS,
-		BlockLibrary.Type.DIRT,
-		BlockLibrary.Type.STONE,
-		BlockLibrary.Type.STONE_DARK,
-		BlockLibrary.Type.SAND,
-		BlockLibrary.Type.SAND_PALE,
-		BlockLibrary.Type.GRAVEL,
-		BlockLibrary.Type.SNOW,
+		TerrainMaterials.Type.GRASS,
+		TerrainMaterials.Type.DIRT,
+		TerrainMaterials.Type.STONE,
+		TerrainMaterials.Type.STONE_DARK,
+		TerrainMaterials.Type.SAND,
+		TerrainMaterials.Type.SAND_PALE,
+		TerrainMaterials.Type.GRAVEL,
+		TerrainMaterials.Type.SNOW,
 	]:
-		layers.append(_flat_layer(BlockLibrary.COLOR[type]))
+		layers.append(_flat_layer(TerrainMaterials.COLOR[type]))
 
 	var array := Texture2DArray.new()
 	array.create_from_images(layers)

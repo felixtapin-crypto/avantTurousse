@@ -6,12 +6,11 @@ extends SceneTree
 #
 # Ce que ces controles protegent :
 #
-# 1. PAS D'EAU ENTERREE. Regle demandee : on ne doit jamais tomber sur une
-#    tuile d'eau en creusant. C'est garanti par construction, mais c'est
-#    exactement le genre d'invariant qu'un ajout de grottes ou de rivieres
-#    casse sans prevenir. Le controle passe par le VRAI generateur
-#    godot_voxel, pas par une relecture de la carte : c'est le code qui
-#    tourne en jeu qu'on veut tester.
+# 1. LA SURFACE SUIT LA CARTE. La distance signee doit changer de signe a
+#    l'altitude annoncee par la carte, sans quoi le joueur flotte ou se
+#    retrouve enterre, et l'ecran d'apercu ment sur ce qu'on trouvera en jeu.
+#    Le controle passe par le VRAI generateur et non par une relecture de la
+#    carte : c'est le code qui tourne en partie qu'on veut tester.
 #
 # 2. REPARTITION DES BIOMES. Un biome peut exister dans le code et ne jamais
 #    sortir a la generation parce qu'un seuil est mal calibre. C'est ainsi
@@ -30,6 +29,11 @@ const CHUNK := 16
 # regenerer chaque voxel deux fois.
 const CHUNK_STRIDE := 2
 
+# Part minimale sous laquelle un biome n'est plus un biome mais un artefact.
+const MIN_BIOME_SHARE := 0.0015
+const SIZES_TO_CHECK := [300, 450, 600]
+const SEEDS_TO_CHECK := [1, 7, 99]
+
 
 func _initialize() -> void:
 	var map := WorldMap.new(INVARIANT_SIZE, 64)
@@ -38,8 +42,24 @@ func _initialize() -> void:
 	print("carte de controle %d generee en %d ms" % [INVARIANT_SIZE, Time.get_ticks_msec() - t0])
 
 	var failures := 0
-	failures += _check_generated_water(map)
+	failures += _check_surface(map)
 	failures += _check_biomes(map)
+
+	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
+	# et manquer sur une autre, et ce n'est pas acceptable — une partie tiree
+	# au hasard ne doit jamais se retrouver sans desert ni sans neige.
+	for size in SIZES_TO_CHECK:
+		for seed_value in SEEDS_TO_CHECK:
+			var other := WorldMap.new(size, 64)
+			other.generate(seed_value)
+			var missing := _missing_biomes(other)
+			if missing.is_empty():
+				print("\n  %d / seed %d : les %d biomes sont presents"
+					% [size, seed_value, WorldMap.Biome.values().size()])
+			else:
+				printerr("\n  %d / seed %d : manquent %s" % [size, seed_value, ", ".join(missing)])
+				failures += 1
+
 	_benchmark()
 
 	if failures == 0:
@@ -48,22 +68,27 @@ func _initialize() -> void:
 		printerr("\nECHEC — %d probleme(s)." % failures)
 	quit(1 if failures > 0 else 0)
 
+# Le generateur ecrit une distance signee : negative dans la matiere, positive
+# dans le vide. La surface est donc la ou elle change de signe, et elle doit
+# tomber sur l'altitude du sol annoncee par la carte.
+#
+# C'est l'invariant central du terrain lisse. S'il derive, le joueur se
+# retrouve a flotter ou enterre, et la carte d'apercu ment sur ce qu'on
+# trouvera en jeu. On balaie depuis le CIEL vers le bas : la premiere valeur
+# negative rencontree est la surface, ce qui rend le controle insensible aux
+# grottes, situees plus bas.
+func _check_surface(map: WorldMap) -> int:
+	print("\n--- surface produite par le generateur ---")
 
-# Fait tourner le generateur godot_voxel sur un echantillon de chunks et
-# verifie que chaque voxel d'eau se trouve STRICTEMENT au-dessus du sol de sa
-# colonne. Une riviere au-dessus du niveau de la mer est legitime ; une tuile
-# d'eau au niveau du sol ou en dessous ne l'est jamais.
-func _check_generated_water(map: WorldMap) -> int:
-	print("\n--- eau produite par le generateur godot_voxel ---")
-
-	var generator := KayKitVoxelGenerator.new()
+	var generator := TerrainGenerator.new()
 	generator.map = map
 
-	var buried := 0
-	var sea := 0
-	var river := 0
-	var solid := 0
-	var first_bad := Vector3i(-1, -1, -1)
+	var checked := 0
+	var drift_total := 0.0
+	var worst := 0.0
+	var worst_at := Vector2i(-1, -1)
+	var missing := 0
+	var bedrock_holes := 0
 
 	var chunks := int(ceil(float(map.size_xz) / float(CHUNK)))
 	@warning_ignore("integer_division")
@@ -71,52 +96,66 @@ func _check_generated_water(map: WorldMap) -> int:
 
 	for cz in range(0, chunks, CHUNK_STRIDE):
 		for cx in range(0, chunks, CHUNK_STRIDE):
+			# Une colonne de chunks, du sol au ciel, pour retrouver la surface.
+			var column: Array[VoxelBuffer] = []
 			for cy in chunks_y:
-				var origin := Vector3i(cx * CHUNK, cy * CHUNK, cz * CHUNK)
 				var buffer := VoxelBuffer.new()
 				buffer.create(CHUNK, CHUNK, CHUNK)
-				generator._generate_block(buffer, origin, 0)
+				generator._generate_block(
+					buffer, Vector3i(cx * CHUNK, cy * CHUNK, cz * CHUNK), 0)
+				column.append(buffer)
 
-				for y in CHUNK:
-					for z in CHUNK:
-						for x in CHUNK:
-							var v := buffer.get_voxel(x, y, z, VoxelBuffer.CHANNEL_TYPE)
-							if v == BlockLibrary.Type.AIR:
-								continue
-							if v != BlockLibrary.Type.WATER:
-								solid += 1
-								continue
-							var wx := origin.x + x
-							var wy := origin.y + y
-							var wz := origin.z + z
-							var ground := map.terrain_height(wx, wz)
-							if wy <= ground:
-								buried += 1
-								if first_bad.x < 0:
-									first_bad = Vector3i(wx, wy, wz)
-							elif wy > WorldMap.SEA_LEVEL:
-								river += 1
-							else:
-								sea += 1
+			for lz in CHUNK:
+				for lx in CHUNK:
+					var wx := cx * CHUNK + lx
+					var wz := cz * CHUNK + lz
+					if wx >= map.size_xz or wz >= map.size_xz:
+						continue
 
-	print("  solide : %d voxels" % solid)
-	print("  mer : %d voxels" % sea)
-	print("  riviere : %d voxels" % river)
-	print("  ENTERREE : %d %s" % [buried, "" if buried == 0 else "(premier: %v)" % first_bad])
+					# La bedrock du fond doit etre pleine partout.
+					if column[0].get_voxel_f(lx, 0, lz, VoxelBuffer.CHANNEL_SDF) >= 0.0:
+						bedrock_holes += 1
+
+					var surface := -1
+					for y in range(map.size_y - 1, -1, -1):
+						@warning_ignore("integer_division")
+						var buffer: VoxelBuffer = column[y / CHUNK]
+						if buffer.get_voxel_f(lx, y % CHUNK, lz, VoxelBuffer.CHANNEL_SDF) < 0.0:
+							surface = y
+							break
+
+					if surface < 0:
+						missing += 1
+						continue
+
+					var drift := absf(float(surface) - float(map.terrain_height(wx, wz)))
+					checked += 1
+					drift_total += drift
+					if drift > worst:
+						worst = drift
+						worst_at = Vector2i(wx, wz)
+
+	print("  %d colonnes verifiees" % checked)
+	if checked > 0:
+		print("  ecart a la carte : %.2f voxel en moyenne, %.1f au pire (en %v)" % [
+			drift_total / float(checked), worst, worst_at])
+	print("  colonnes sans surface : %d" % missing)
+	print("  trous dans la bedrock : %d" % bedrock_holes)
 
 	var failures := 0
-	if solid == 0:
-		printerr("  le generateur ne produit aucun solide")
+	if checked == 0:
+		printerr("  le generateur ne produit aucune matiere")
 		failures += 1
-	if sea == 0:
-		printerr("  aucune mer generee")
+	if missing > 0:
+		printerr("  des colonnes n'ont aucune surface : le joueur y tomberait sans fin")
 		failures += 1
-	if buried > 0:
-		printerr("  de l'eau est enterree : on en trouvera en creusant")
+	if bedrock_holes > 0:
+		printerr("  la bedrock est percee : le fond du monde n'est pas etanche")
+		failures += 1
+	if checked > 0 and drift_total / float(checked) > 1.5:
+		printerr("  la surface derive de la carte : l'apercu ne dit pas la verite du terrain")
 		failures += 1
 	return failures
-
-
 func _check_biomes(map: WorldMap) -> int:
 	print("\n--- repartition des biomes ---")
 	var counts := {}
@@ -134,11 +173,20 @@ func _check_biomes(map: WorldMap) -> int:
 
 	_report_climate(map)
 
+	# On exige que CHAQUE biome de l'enumeration sorte, sans liste choisie a la
+	# main : un biome qu'on oublierait d'inscrire ici pourrait disparaitre sans
+	# que rien ne le signale, et resterait du code mort dans le generateur.
+	# Un biome doit aussi depasser un plancher de visibilite — trois colonnes
+	# perdues sur une carte ne sont pas un biome, c'est un artefact.
 	var failures := 0
-	for required in [WorldMap.Biome.BEACH, WorldMap.Biome.DESERT,
-			WorldMap.Biome.SNOW, WorldMap.Biome.RIVER]:
-		if int(counts.get(required, 0)) == 0:
-			printerr("  biome absent de la carte : %s" % map.biome_name(required))
+	for required in WorldMap.Biome.values():
+		var found := int(counts.get(required, 0))
+		if found == 0:
+			printerr("  ABSENT : %s" % map.biome_name(required))
+			failures += 1
+		elif float(found) / float(total) < MIN_BIOME_SHARE:
+			printerr("  TROP RARE : %s, %d colonnes (%.3f %%)" % [
+				map.biome_name(required), found, 100.0 * float(found) / float(total)])
 			failures += 1
 	return failures
 
@@ -199,7 +247,7 @@ func _benchmark() -> void:
 
 		# Cout d'un chunk au niveau du sol : c'est ce que godot_voxel paiera
 		# par bloc, en tache de fond, pendant que le joueur se deplace.
-		var generator := KayKitVoxelGenerator.new()
+		var generator := TerrainGenerator.new()
 		generator.map = map
 		var centre := int(size / 2.0)
 		@warning_ignore("integer_division")
@@ -214,3 +262,19 @@ func _benchmark() -> void:
 		var per_block := float(Time.get_ticks_usec() - t1) / float(blocks) / 1000.0
 
 		print("  %d x64x %d : carte %d ms, puis %.2f ms par chunk de surface" % [size, size, map_ms, per_block])
+
+
+# Noms des biomes qui n'apparaissent pas, ou trop peu pour compter.
+func _missing_biomes(map: WorldMap) -> PackedStringArray:
+	var counts := {}
+	for z in map.size_xz:
+		for x in map.size_xz:
+			var biome := map.biome_at(x, z)
+			counts[biome] = int(counts.get(biome, 0)) + 1
+
+	var total := map.size_xz * map.size_xz
+	var missing := PackedStringArray()
+	for biome in WorldMap.Biome.values():
+		if float(int(counts.get(biome, 0))) / float(total) < MIN_BIOME_SHARE:
+			missing.append(map.biome_name(biome))
+	return missing

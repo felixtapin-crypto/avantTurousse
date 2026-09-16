@@ -1,4 +1,4 @@
-class_name KayKitSmoothGenerator
+class_name TerrainGenerator
 extends VoxelGeneratorScript
 
 # Generateur pour le terrain LISSE (Transvoxel), a comparer avec le rendu en
@@ -144,12 +144,12 @@ func _set_material(buffer: VoxelBuffer, x: int, y: int, z: int, layer: int) -> v
 
 func _layer_for(block_type: int) -> int:
 	match block_type:
-		BlockLibrary.Type.GRASS: return Layer.GRASS
-		BlockLibrary.Type.DIRT: return Layer.DIRT
-		BlockLibrary.Type.STONE: return Layer.STONE
-		BlockLibrary.Type.STONE_DARK: return Layer.STONE_DARK
-		BlockLibrary.Type.SAND: return Layer.SAND
-		BlockLibrary.Type.SAND_PALE: return Layer.SAND_PALE
-		BlockLibrary.Type.GRAVEL: return Layer.GRAVEL
-		BlockLibrary.Type.SNOW: return Layer.SNOW
+		TerrainMaterials.Type.GRASS: return Layer.GRASS
+		TerrainMaterials.Type.DIRT: return Layer.DIRT
+		TerrainMaterials.Type.STONE: return Layer.STONE
+		TerrainMaterials.Type.STONE_DARK: return Layer.STONE_DARK
+		TerrainMaterials.Type.SAND: return Layer.SAND
+		TerrainMaterials.Type.SAND_PALE: return Layer.SAND_PALE
+		TerrainMaterials.Type.GRAVEL: return Layer.GRAVEL
+		TerrainMaterials.Type.SNOW: return Layer.SNOW
 		_: return Layer.STONE

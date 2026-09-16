@@ -28,17 +28,16 @@ signal edit_refused(reason: String)
 # le long de la normale qu'imposait un raycast physique.
 var voxel_tool: VoxelTool
 
-# En terrain lisse il n'y a plus de bloc a retirer : on sculpte une distance
-# signee a la sphere. C'est une difference de GAMEPLAY, pas seulement de
-# rendu — `DESIGN.md` demande de poser des blocs pour batir un abri, ce qui
-# est nettement moins naturel au pinceau spherique.
-var smooth_mode := false
+# Le terrain etant lisse, il n'y a pas de bloc a retirer : on sculpte une
+# distance signee a la sphere. C'est une difference de GAMEPLAY et pas
+# seulement de rendu — `DESIGN.md` demande de poser des blocs pour batir un
+# abri, ce qui est nettement moins naturel au pinceau spherique, et reste a
+# retrancher (voir issue #34).
 var brush_radius := 2.5
 
 var flying := true
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
-var _held_block: int = BlockLibrary.Type.STONE
 
 
 func _ready() -> void:
@@ -105,6 +104,15 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 
 
+# Sculptage : on n'enleve pas un bloc, on retire ou ajoute de la matiere dans
+# une sphere, et le mailleur replace la surface la ou la distance signee
+# change de signe.
+#
+# La bedrock n'est pas protegee ici, et ne peut pas l'etre bloc par bloc : le
+# pinceau en couvre plusieurs a la fois. En terrain lisse, la bonne facon de
+# la rendre increusable est de borner la distance signee dans le generateur —
+# pas encore fait (voir issue #34). Idem pour la synchro reseau : la regle
+# devra vivre cote serveur, sinon un pair pourra la contourner.
 func _edit(remove: bool) -> void:
 	if voxel_tool == null:
 		return
@@ -115,52 +123,13 @@ func _edit(remove: bool) -> void:
 	if hit == null:
 		return
 
-	if smooth_mode:
-		_sculpt(hit, remove)
-		return
-
-	# `position` est le voxel touche, `previous_position` le vide juste avant
-	# lui le long du rayon — exactement ce qu'il faut pour poser un bloc.
-	var cell: Vector3i = hit.position if remove else hit.previous_position
-
-	# Avec le streaming, un chunk peut ne pas etre charge : editer la-dedans
-	# serait perdu au chargement.
-	if not voxel_tool.is_area_editable(AABB(Vector3(cell), Vector3.ONE)):
-		edit_refused.emit("Zone pas encore chargee.")
-		return
-
-	var current := voxel_tool.get_voxel(cell)
-
-	if remove:
-		# La bedrock du fond de la carte et l'eau ne se creusent pas.
-		# NOTE : cette regle vivait dans notre terrain, qui etait le passage
-		# oblige de toute modification. Avec godot_voxel il n'y a plus de
-		# goulot que nous possedions, donc elle est ici en attendant — et
-		# devra repasser cote serveur quand la synchro reseau arrivera, sans
-		# quoi un pair pourra la contourner (voir #34).
-		if not BlockLibrary.is_breakable(current):
-			edit_refused.emit("Roche indestructible : le fond de la carte ne se creuse pas.")
-			return
-		voxel_tool.set_voxel(cell, BlockLibrary.Type.AIR)
-	else:
-		if current != BlockLibrary.Type.AIR:
-			return
-		voxel_tool.set_voxel(cell, _held_block)
-
-
-# Sculptage en terrain lisse. On ne retire pas un bloc, on ajoute ou retire de
-# la matiere dans une sphere, et le mailleur replace la surface la ou la
-# distance signee change de signe.
-#
-# La bedrock n'est pas protegee ici : le pinceau couvre plusieurs voxels a la
-# fois, donc la refuser bloc par bloc n'aurait pas de sens. En lisse, la bonne
-# facon de la rendre increusable est de borner la distance signee dans le
-# generateur, ce que ce prototype ne fait pas encore.
-func _sculpt(hit, remove: bool) -> void:
 	var center: Vector3 = hit.position
-	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
+	# Avec le streaming, un chunk peut ne pas etre charge : sculpter dedans
+	# serait perdu au chargement.
 	var box := AABB(center - Vector3.ONE * brush_radius, Vector3.ONE * brush_radius * 2.0)
 	if not voxel_tool.is_area_editable(box):
 		edit_refused.emit("Zone pas encore chargee.")
 		return
+
+	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
 	voxel_tool.do_sphere(center, brush_radius)

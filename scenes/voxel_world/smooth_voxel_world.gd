@@ -1,20 +1,16 @@
 extends Node3D
 
-# Variante LISSE du monde voxel (Transvoxel), a comparer avec le rendu en
-# blocs de `godot_voxel_world.tscn`.
+# Monde de jeu : terrain lisse (Transvoxel) genere depuis une `WorldMap`.
 #
-# Meme `WorldMap`, meme seed, meme relief : seule la representation change.
-# Lancer les deux scenes cote a cote est le seul moyen honnete de trancher
-# entre les deux directions artistiques.
+# Un rendu en blocs a existe en parallele le temps de comparer les deux
+# directions artistiques ; le lisse l'a emporte et l'autre a ete retire (voir
+# issue #34). Restent deux consequences a retrancher un jour, qui ne sont pas
+# visuelles :
 #
-# Ce que le lisse change au-dela du visuel, et qu'il faut avoir en tete avant
-# de choisir :
-#
-# - creuser devient du sculptage a la sphere, pas du retrait de bloc, et
+# - creuser est du sculptage a la sphere, pas du retrait de bloc, alors que
 #   `DESIGN.md` demande de "poser des voxels/blocs pour batir une cabane" ;
-# - l'eau ne peut plus etre un voxel, elle devient un plan a hauteur de mer ;
-# - la matiere se peint par melange de 4 couches, donc il faut de vraies
-#   textures raccordables la ou le rendu en blocs se contentait d'un aplat.
+# - la bedrock ne peut plus etre protegee bloc par bloc, il faudra borner la
+#   distance signee dans le generateur.
 
 @onready var player: CharacterBody3D = $Player
 @onready var status_label: Label = $Hud/StatusLabel
@@ -49,7 +45,7 @@ func _ready() -> void:
 		map.generate(world_seed)
 	var map_ms := Time.get_ticks_msec() - started
 
-	var generator := KayKitSmoothGenerator.new()
+	var generator := TerrainGenerator.new()
 	generator.map = map
 
 	terrain = VoxelTerrain.new()
@@ -76,7 +72,6 @@ func _ready() -> void:
 	player.add_child(viewer)
 
 	player.voxel_tool = _tool
-	player.smooth_mode = true
 	player.edit_refused.connect(_on_edit_refused)
 	player.flying = true
 	player.position = _spawn_position()
@@ -99,7 +94,7 @@ func _add_sea() -> void:
 	plane.mesh = mesh
 
 	var material := StandardMaterial3D.new()
-	material.albedo_color = BlockLibrary.COLOR[BlockLibrary.Type.WATER]
+	material.albedo_color = TerrainMaterials.COLOR[TerrainMaterials.Type.WATER]
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.roughness = 0.1
