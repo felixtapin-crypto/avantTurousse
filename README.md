@@ -58,3 +58,18 @@ scenes/
 - Ajouter du gameplay (objectif, interactions, autre chose selon l'idée de jeu).
 - Ajouter un nom de joueur affiché au-dessus de chaque personnage.
 - Choisir une solution d'hébergement si vous voulez jouer à distance régulièrement.
+
+## Voxel Tools (extension godot_voxel)
+
+La carte voxel utilise [godot_voxel](https://github.com/Zylann/godot_voxel) de
+Zylann (licence MIT). Les binaires ne sont **pas** versionnés : ils pèsent 21 Mo
+pour Windows seul, 130 Mo pour toutes les plateformes, et la dépendance n'est
+pas encore validée (voir l'issue #34).
+
+Pour lancer la scène `scenes/voxel_world/godot_voxel_world.tscn`, télécharger
+l'archive **GDExtension** de la release
+[v1.7x](https://github.com/Zylann/godot_voxel/releases/tag/v1.7x) (pour Godot
+4.5+) et la dézipper à la racine du projet : elle remplit `addons/zylann.voxel/`.
+
+Sans cette étape, Godot ouvre le projet mais la scène voxel échoue, les classes
+`VoxelTerrain` et consorts étant introuvables.

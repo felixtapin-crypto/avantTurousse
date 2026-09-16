@@ -1,24 +1,27 @@
-class_name VoxelData
+class_name WorldMap
 extends RefCounted
 
-# Grille de voxels en 3 dimensions (issue #4) : une ile entouree par la mer.
+# Carte du monde en 2D : une altitude, un climat et un biome par colonne.
+# Ne contient AUCUN voxel — c'est la couche au-dessus, qui empile les blocs.
 #
-# Difference fondamentale avec `scenes/world/platform.gd` : la plateforme
-# actuelle stocke UNE hauteur par colonne, donc elle ne peut representer ni
-# grotte, ni surplomb, ni toit separe du sol. Ici chaque voxel existe
-# independamment, donc tout ca devient possible.
+# Cette separation n'est pas cosmetique, elle est ce qui rend les deux
+# moteurs de rendu interchangeables (voir issue #34) :
 #
-# Stockage : un seul PackedByteArray plat pour tout le monde (1 octet = 1
-# type de bloc). Les Packed*Array de Godot sont en copie-sur-ecriture, donc
-# garder un chunk dans une variable puis ecrire dedans ne modifierait PAS la
-# copie rangee dans un dictionnaire, silencieusement — un tableau plat evite
-# ce piege et rend l'acces voxel a une simple indexation, ce qui compte quand
-# le mailleur lit 6 voisins par voxel.
+# - le moteur maison (`voxel_data.gd` + `voxel_mesher.gd`) remplit un tableau
+#   de voxels complet et maille lui-meme ;
+# - godot_voxel appelle `_generate_block()` par chunk, DEPUIS PLUSIEURS
+#   THREADS, et suppose donc une generation strictement locale.
 #
-# Le decoupage en chunks reste, mais uniquement comme unite de MAILLAGE
-# (issue #3) : on ne remaille que le chunk touche par un creusage.
-
-const CHUNK_SIZE := 16
+# Le second modele est incompatible avec deux de nos passes, qui ont un rayon
+# NON BORNE : l'accumulation d'ecoulement (le debit d'une colonne depend de
+# tout son bassin amont) et l'ombre pluviometrique (54 voxels au vent). Le
+# pattern des demos de godot_voxel — re-deriver les chunks voisins avec la
+# meme graine — ne marche que pour un rayon borne, comme un arbre.
+#
+# La resolution tient en une observation : tout ce travail global est en 2D,
+# et le 3D (empiler une colonne, creuser les grottes) est purement local. On
+# calcule donc cette carte UNE fois, et les deux moteurs se contentent de la
+# lire. En lecture seule apres `generate()`, elle est sure en multithread.
 
 # ===========================================================================
 # CHAINE DE GENERATION
@@ -164,10 +167,7 @@ enum Biome {
 
 var size_xz: int
 var size_y: int
-var chunks_xz: int
-var chunks_y: int
 
-var _voxels: PackedByteArray
 var _heights: PackedInt32Array      # altitude du sol, entiere, apres erosion
 var _height_f: PackedFloat32Array   # la meme, en flottant, pendant la generation
 var _continentality: PackedFloat32Array # 0 au rivage, 1 au coeur des terres
@@ -179,22 +179,16 @@ var _temperature: PackedFloat32Array
 var _moisture: PackedFloat32Array
 var _shadow: PackedFloat32Array     # ombre pluviometrique, 0 au vent, 1 sous le vent
 var _biomes: PackedByteArray
-# Marquage des chunks non vides par un tableau de drapeaux plutot que par un
-# dictionnaire de Vector3i. Le remplissage ecrit des millions de voxels, et
-# une insertion de dictionnaire par voxel (construction de la cle comprise)
-# coutait plus cher que l'ecriture du voxel elle-meme.
-var _chunk_used: PackedByteArray
+var _cave_noise := FastNoiseLite.new()
+var _min_height := 0
+var _max_height := 0
 
 
 func _init(world_size_xz: int = 600, world_size_y: int = 64) -> void:
 	size_xz = world_size_xz
 	size_y = world_size_y
-	chunks_xz = int(ceil(float(size_xz) / float(CHUNK_SIZE)))
-	chunks_y = int(ceil(float(size_y) / float(CHUNK_SIZE)))
 
 	var columns := size_xz * size_xz
-	_voxels = PackedByteArray()
-	_voxels.resize(columns * size_y)
 	_heights = PackedInt32Array()
 	_heights.resize(columns)
 	_height_f = PackedFloat32Array()
@@ -211,80 +205,29 @@ func _init(world_size_xz: int = 600, world_size_y: int = 64) -> void:
 	_shadow.resize(columns)
 	_biomes = PackedByteArray()
 	_biomes.resize(columns)
-	_chunk_used = PackedByteArray()
-	_chunk_used.resize(chunks_xz * chunks_y * chunks_xz)
 
 
 # --- Acces ----------------------------------------------------------------
 
-func is_inside(x: int, y: int, z: int) -> bool:
-	return x >= 0 and y >= 0 and z >= 0 \
-		and x < size_xz and y < size_y and z < size_xz
+# Altitudes extremes du terrain, bornes comprises. Sert aux moteurs a sauter
+# d'un bloc un chunk entierement au-dessus du relief (tout en air) ou
+# entierement en dessous (tout en pierre), sans l'examiner voxel par voxel.
+func height_range() -> Vector2i:
+	return Vector2i(_min_height, _max_height)
 
 
-func get_voxel(x: int, y: int, z: int) -> int:
-	if not is_inside(x, y, z):
-		return BlockLibrary.Type.AIR
-	return _voxels[(y * size_xz + z) * size_xz + x]
+# Le bruit 3D des grottes est expose plutot que consomme sur place : le
+# creusement est la seule partie du remplissage qui n'est pas deductible de
+# la carte 2D, et les deux moteurs doivent en faire exactement la meme
+# lecture pour produire le meme monde. FastNoiseLite n'a pas d'etat
+# d'echantillonnage, donc l'appel est sur depuis plusieurs threads — a la
+# difference d'un Curve, qui se cuit paresseusement et plante dans ce cas
+# (piege documente dans les demos de godot_voxel).
+func is_cave(x: int, y: int, z: int, depth: int) -> bool:
+	if depth <= CAVE_SURFACE_MARGIN or depth >= CAVE_MAX_DEPTH:
+		return false
+	return _cave_noise.get_noise_3d(float(x), float(y), float(z)) > CAVE_THRESHOLD
 
-
-func set_voxel(x: int, y: int, z: int, type: int) -> void:
-	if not is_inside(x, y, z):
-		return
-	_voxels[(y * size_xz + z) * size_xz + x] = type
-	if type != BlockLibrary.Type.AIR:
-		@warning_ignore("integer_division")
-		_mark_chunk(x / CHUNK_SIZE, y / CHUNK_SIZE, z / CHUNK_SIZE)
-
-
-func _mark_chunk(cx: int, cy: int, cz: int) -> void:
-	_chunk_used[(cy * chunks_xz + cz) * chunks_xz + cx] = 1
-
-
-# Copie une rangee de voxels alignee sur X dans un tampon de `count` octets.
-#
-# Sert au mailleur, qui travaille sur une copie locale du chunk plus un voxel
-# de bordure. Une rangee en X est contigue en memoire, donc le cas courant se
-# resout en une seule tranche memoire au lieu de `count` appels a get_voxel.
-# Hors du monde, les octets restent a zero, c'est-a-dire AIR, ce qui est le
-# bon voisin pour une face au bord de la carte.
-func copy_row(y: int, z: int, x0: int, count: int) -> PackedByteArray:
-	if y < 0 or y >= size_y or z < 0 or z >= size_xz:
-		var empty := PackedByteArray()
-		empty.resize(count)
-		return empty
-
-	var row_base := (y * size_xz + z) * size_xz
-	if x0 >= 0 and x0 + count <= size_xz:
-		return _voxels.slice(row_base + x0, row_base + x0 + count)
-
-	var out := PackedByteArray()
-	out.resize(count)
-	for i in count:
-		var x := x0 + i
-		if x >= 0 and x < size_xz:
-			out[i] = _voxels[row_base + x]
-	return out
-
-
-func chunk_of(x: int, y: int, z: int) -> Vector3i:
-	@warning_ignore("integer_division")
-	return Vector3i(x / CHUNK_SIZE, y / CHUNK_SIZE, z / CHUNK_SIZE)
-
-
-func used_chunk_keys() -> Array:
-	var out := []
-	for cy in chunks_y:
-		for cz in chunks_xz:
-			for cx in chunks_xz:
-				if _chunk_used[(cy * chunks_xz + cz) * chunks_xz + cx] == 1:
-					out.append(Vector3i(cx, cy, cz))
-	return out
-
-
-# Altitude du sol d'une colonne, eau exclue. C'est la donnee a utiliser pour
-# poser quelque chose par terre — contrairement a un scan du haut vers le
-# bas, qui s'arreterait sur la surface de la mer.
 func terrain_height(x: int, z: int) -> int:
 	if x < 0 or z < 0 or x >= size_xz or z >= size_xz:
 		return -1
@@ -331,11 +274,20 @@ func biome_name(biome: int) -> String:
 # par partie, elle devra etre TRANSMISE au client et ne pourra plus etre une
 # constante compilee — voir issue #31.
 func generate(seed_value: int) -> void:
+	_cave_noise.seed = seed_value + 3
+	_cave_noise.frequency = 0.045
+	_cave_noise.fractal_octaves = 2
+
 	_build_base_relief(seed_value)
 	_apply_hydrology()
 	_build_rain_shadow()
 	_classify(seed_value)
-	_fill_voxels(seed_value)
+
+	_min_height = size_y
+	_max_height = 0
+	for h in _heights:
+		_min_height = mini(_min_height, h)
+		_max_height = maxi(_max_height, h)
 
 
 # Ombre pluviometrique : on remonte le vent sur quelques dizaines de voxels et
@@ -690,72 +642,7 @@ func _biome_for(height: int, slope: int, temp: float, moist: float, is_river: bo
 	return Biome.PLAINS
 
 
-func _fill_voxels(seed_value: int) -> void:
-	var cave_noise := FastNoiseLite.new()
-	cave_noise.seed = seed_value + 3
-	cave_noise.frequency = 0.045
-	cave_noise.fractal_octaves = 2
-
-	var layer := size_xz * size_xz
-
-	for z in size_xz:
-		@warning_ignore("integer_division")
-		var cz := z / CHUNK_SIZE
-		for x in size_xz:
-			var i := z * size_xz + x
-			var top := _heights[i]
-			var biome := _biomes[i]
-			var surface_type := _surface_block(biome)
-			# La stratification ne depend que du biome : on la resout une
-			# fois par colonne au lieu d'appeler une fonction par voxel.
-			var strata := _sub_surface(biome)
-			var sub_type := strata.x
-			var sub_depth := strata.y
-
-			# Ecriture directe dans le tableau plat. Passer par set_voxel
-			# couterait un appel de fonction, une verification de bornes et
-			# un marquage de chunk PAR VOXEL, soit des dizaines de millions
-			# d'operations sur une grande carte — plus cher que l'ecriture
-			# du voxel elle-meme.
-			for y in range(0, top + 1):
-				var type := BlockLibrary.Type.STONE_DARK
-				# Bedrock : les couches du fond ne sont ni creusables ni
-				# percables par une grotte, donc le bas du monde reste une
-				# coque etanche.
-				if y >= BEDROCK_DEPTH:
-					var depth := top - y
-					if depth > CAVE_SURFACE_MARGIN and depth < CAVE_MAX_DEPTH \
-							and cave_noise.get_noise_3d(float(x), float(y), float(z)) > CAVE_THRESHOLD:
-						continue
-					if depth == 0:
-						type = surface_type
-					elif depth <= sub_depth:
-						type = sub_type
-					else:
-						type = BlockLibrary.Type.STONE
-				_voxels[y * layer + i] = type
-
-			# L'eau n'est posee QUE au-dessus du sol, jamais a l'interieur.
-			# C'est ce qui garantit qu'on ne tombe jamais sur une tuile d'eau
-			# en creusant dans l'ile : il n'y en a pas a trouver.
-			var highest := top
-			if top < SEA_LEVEL:
-				for y in range(top + 1, SEA_LEVEL + 1):
-					_voxels[y * layer + i] = BlockLibrary.Type.WATER
-				highest = SEA_LEVEL
-			elif biome == Biome.RIVER and top + 1 < size_y:
-				_voxels[(top + 1) * layer + i] = BlockLibrary.Type.WATER
-				highest = top + 1
-
-			@warning_ignore("integer_division")
-			var cx := x / CHUNK_SIZE
-			@warning_ignore("integer_division")
-			var top_chunk := highest / CHUNK_SIZE
-			for cy in range(0, top_chunk + 1):
-				_mark_chunk(cx, cy, cz)
-
-
-func _surface_block(biome: int) -> int:
+func surface_block(biome: int) -> int:
 	match biome:
 		Biome.DEEP_SEA:
 			return BlockLibrary.Type.GRAVEL
@@ -777,7 +664,7 @@ func _surface_block(biome: int) -> int:
 
 # Couche meuble sous la surface d'un biome : (type de bloc, epaisseur).
 # En-dessous, c'est de la pierre dans tous les cas.
-func _sub_surface(biome: int) -> Vector2i:
+func sub_surface(biome: int) -> Vector2i:
 	match biome:
 		Biome.DESERT:
 			# Une dune est du sable sur une bonne epaisseur, pas un voile.

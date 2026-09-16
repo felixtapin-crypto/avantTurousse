@@ -1,21 +1,19 @@
 extends CharacterBody3D
 
-# Controleur de TEST pour la scene voxel, volontairement separe du vrai
-# joueur (`scenes/player/player.gd`).
+# Controleur de TEST, volontairement separe du vrai joueur
+# (`scenes/player/player.gd`).
 #
 # Deux raisons de ne pas reutiliser player.gd ici :
 # - il attend un `Platform` (la heightmap) et un `World`, donc le brancher
 #   sur le voxel demanderait de le modifier ;
-# - il est justement en cours de modification par la PR #29 (eau, faim/soif,
-#   plantes), et `TASKS.md` demande de ne pas toucher a un systeme deja pris.
+# - il est en cours de modification par la PR #29 (eau, faim/soif, plantes),
+#   et `TASKS.md` demande de ne pas toucher a un systeme deja pris.
 #
-# Le vrai joueur sera porte sur le terrain voxel une fois #29 mergee. D'ici
-# la, ce controleur sert a inspecter l'ile et a verifier que creuser/poser
-# ne remaille bien que le chunk touche.
+# Le vrai joueur sera porte sur le terrain voxel une fois #29 mergee.
 
 const WALK_SPEED := 6.0
 const SPRINT_MULTIPLIER := 2.0
-const FLY_SPEED := 24.0
+const FLY_SPEED := 32.0
 const JUMP_VELOCITY := 5.5
 const MOUSE_SENSITIVITY := 0.003
 const REACH := 8.0
@@ -24,7 +22,12 @@ signal edit_refused(reason: String)
 
 @onready var camera: Camera3D = $Camera3D
 
-var terrain: VoxelTerrain
+# Outil d'edition fourni par le terrain godot_voxel. Son raycast travaille
+# directement sur la grille de voxels : il rend la position exacte du voxel
+# vise ET celle du vide juste devant, ce qui evite le decalage d'un demi-bloc
+# le long de la normale qu'imposait un raycast physique.
+var voxel_tool: VoxelTool
+
 var flying := true
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
@@ -60,12 +63,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var wish := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
 
 	if flying:
-		var speed := FLY_SPEED
 		# En vol on suit le regard : sinon impossible de monter voir l'ile
-		# d'en haut ou de descendre inspecter la quille.
+		# d'en haut ou de descendre inspecter le fond marin.
 		var forward := -camera.global_transform.basis.z
 		var right := camera.global_transform.basis.x
 		var direction := (right * input_dir.x + forward * -input_dir.y).normalized()
@@ -73,7 +74,7 @@ func _physics_process(delta: float) -> void:
 			direction += Vector3.UP
 		if Input.is_key_pressed(KEY_SHIFT):
 			direction += Vector3.DOWN
-		velocity = direction.normalized() * speed
+		velocity = direction.normalized() * FLY_SPEED
 		move_and_slide()
 		return
 
@@ -82,47 +83,55 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_just_pressed("jump") and is_on_floor():
 		velocity.y = JUMP_VELOCITY
 
-	var speed_walk := WALK_SPEED
+	var speed := WALK_SPEED
 	if Input.is_key_pressed(KEY_SHIFT):
-		speed_walk *= SPRINT_MULTIPLIER
+		speed *= SPRINT_MULTIPLIER
 
+	var wish := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
 	if wish:
-		velocity.x = wish.x * speed_walk
-		velocity.z = wish.z * speed_walk
+		velocity.x = wish.x * speed
+		velocity.z = wish.z * speed
 	else:
-		velocity.x = move_toward(velocity.x, 0.0, speed_walk)
-		velocity.z = move_toward(velocity.z, 0.0, speed_walk)
+		velocity.x = move_toward(velocity.x, 0.0, speed)
+		velocity.z = move_toward(velocity.z, 0.0, speed)
 
 	move_and_slide()
 
 
-# Creuser (remove=true) ou poser (remove=false) un voxel. Le point d'impact
-# est sur la FACE du bloc, donc on decale d'un demi-voxel le long de la
-# normale pour tomber a l'interieur du bloc vise (creuser) ou dans le vide
-# juste devant (poser).
 func _edit(remove: bool) -> void:
-	if terrain == null:
+	if voxel_tool == null:
 		return
-	var space := get_world_3d().direct_space_state
+
 	var from := camera.global_position
-	var to := from - camera.global_transform.basis.z * REACH
-	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.exclude = [self]
-	var hit := space.intersect_ray(query)
-	if hit.is_empty():
+	var direction := -camera.global_transform.basis.z
+	var hit := voxel_tool.raycast(from, direction, REACH)
+	if hit == null:
 		return
 
-	var position: Vector3 = hit["position"]
-	var normal: Vector3 = hit["normal"]
-	var target := position + (normal * (0.5 if not remove else -0.5))
-	var cell := Vector3i(floori(target.x), floori(target.y), floori(target.z))
+	# `position` est le voxel touche, `previous_position` le vide juste avant
+	# lui le long du rayon — exactement ce qu'il faut pour poser un bloc.
+	var cell: Vector3i = hit.position if remove else hit.previous_position
 
-	var before := terrain.get_voxel(cell.x, cell.y, cell.z)
-	var applied := terrain.edit_voxel(cell.x, cell.y, cell.z,
-		BlockLibrary.Type.AIR if remove else _held_block)
+	# Avec le streaming, un chunk peut ne pas etre charge : editer la-dedans
+	# serait perdu au chargement.
+	if not voxel_tool.is_area_editable(AABB(Vector3(cell), Vector3.ONE)):
+		edit_refused.emit("Zone pas encore chargee.")
+		return
 
-	# Un clic qui ne fait rien ne doit pas se confondre avec un bug — c'est
-	# deja la raison d'etre du viseur dans le jeu actuel. On dit donc
-	# pourquoi le coup n'a pas porte.
-	if not applied and remove and not BlockLibrary.is_breakable(before):
-		edit_refused.emit("Roche indestructible : le fond de l'ile ne se creuse pas.")
+	var current := voxel_tool.get_voxel(cell)
+
+	if remove:
+		# La bedrock du fond de la carte et l'eau ne se creusent pas.
+		# NOTE : cette regle vivait dans notre terrain, qui etait le passage
+		# oblige de toute modification. Avec godot_voxel il n'y a plus de
+		# goulot que nous possedions, donc elle est ici en attendant — et
+		# devra repasser cote serveur quand la synchro reseau arrivera, sans
+		# quoi un pair pourra la contourner (voir #34).
+		if not BlockLibrary.is_breakable(current):
+			edit_refused.emit("Roche indestructible : le fond de la carte ne se creuse pas.")
+			return
+		voxel_tool.set_voxel(cell, BlockLibrary.Type.AIR)
+	else:
+		if current != BlockLibrary.Type.AIR:
+			return
+		voxel_tool.set_voxel(cell, _held_block)

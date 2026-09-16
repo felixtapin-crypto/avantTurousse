@@ -55,6 +55,41 @@ const UV: Dictionary = {
 # mais mieux vaut un bloc gris qu'un plantage au milieu du maillage).
 const FALLBACK_UV := Vector2(0.3435, 0.2154)
 
+# Les memes teintes, en Color plutot qu'en coordonnee d'atlas.
+#
+# Le moteur maison echantillonne la palette par UV ; godot_voxel, lui, colore
+# chaque modele de bloc par une propriete `color` que le mailleur repercute
+# en couleur de sommet (`VoxelMesherBlocky.TINT_RAW_COLOR`). Aucun atlas
+# n'est alors necessaire — ce qui tombe bien, la palette KayKit etant un
+# nuancier d'aplats et non une matiere a repeter.
+#
+# Ces valeurs sont les couleurs que renvoie l'atlas aux UV ci-dessus, pas des
+# teintes choisies a l'oeil : les deux moteurs rendent donc le meme monde.
+const COLOR: Dictionary = {
+	Type.GRASS: Color(0.000, 0.600, 0.349),      # #009959
+	Type.DIRT: Color(0.608, 0.353, 0.271),       # #9B5A45
+	Type.STONE: Color(0.365, 0.392, 0.408),      # #5D6468
+	Type.STONE_DARK: Color(0.235, 0.259, 0.275), # #3C4246
+	Type.SAND: Color(0.808, 0.600, 0.396),       # #CE9965
+	Type.SAND_PALE: Color(0.890, 0.745, 0.557),  # #E3BE8E
+	Type.GRAVEL: Color(0.349, 0.376, 0.392),     # #596064
+	Type.SNOW: Color(0.863, 0.882, 0.894),       # #DCE1E4
+	Type.WATER: Color(0.157, 0.631, 0.855, 0.62),# #28A1DA, translucide
+}
+
+const NAME: Dictionary = {
+	Type.AIR: "air",
+	Type.GRASS: "grass",
+	Type.DIRT: "dirt",
+	Type.STONE: "stone",
+	Type.STONE_DARK: "bedrock",
+	Type.SAND: "sand",
+	Type.SAND_PALE: "sand_pale",
+	Type.GRAVEL: "gravel",
+	Type.SNOW: "snow",
+	Type.WATER: "water",
+}
+
 # Blocs que le joueur ne peut pas retirer.
 #
 # STONE_DARK joue le role de la bedrock de Minecraft. La generation en pose

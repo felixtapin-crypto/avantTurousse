@@ -18,3 +18,8 @@ Thumbs.db
 
 # Local Claude Code session state (not project content)
 .claude/
+
+# Binaires de l'extension godot_voxel (~21 Mo pour Windows seul, ~130 Mo pour
+# toutes les plateformes). Non versionnes tant que la dependance n'est pas
+# validee — voir l'issue #34 et la section "Voxel Tools" du README.
+addons/zylann.voxel/bin/

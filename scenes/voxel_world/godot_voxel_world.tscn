@@ -1,7 +1,6 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=7 format=3]
 
-[ext_resource type="Script" path="res://scenes/voxel_world/voxel_world.gd" id="VoxelWorldScript"]
-[ext_resource type="Script" path="res://scenes/voxel_world/voxel_terrain.gd" id="VoxelTerrainScript"]
+[ext_resource type="Script" path="res://scenes/voxel_world/godot_voxel_world.gd" id="GodotVoxelWorldScript"]
 [ext_resource type="Script" path="res://scenes/voxel_world/voxel_debug_player.gd" id="VoxelDebugPlayerScript"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
@@ -21,8 +20,8 @@ ambient_light_energy = 0.6
 radius = 0.4
 height = 1.8
 
-[node name="VoxelWorld" type="Node3D"]
-script = ExtResource("VoxelWorldScript")
+[node name="GodotVoxelWorld" type="Node3D"]
+script = ExtResource("GodotVoxelWorldScript")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 rotation_degrees = Vector3(-50, -40, 0)
@@ -30,12 +29,6 @@ shadow_enabled = true
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_1")
-
-[node name="VoxelTerrain" type="Node3D" parent="."]
-script = ExtResource("VoxelTerrainScript")
-size_xz = 600
-size_y = 64
-chunks_per_frame = 6
 
 [node name="Player" type="CharacterBody3D" parent="."]
 script = ExtResource("VoxelDebugPlayerScript")
@@ -46,17 +39,17 @@ shape = SubResource("CapsuleShape3D_1")
 
 [node name="Camera3D" type="Camera3D" parent="Player"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
-far = 1000.0
+far = 1200.0
 
 [node name="Hud" type="CanvasLayer" parent="."]
 
 [node name="StatusLabel" type="Label" parent="Hud"]
 offset_left = 16.0
 offset_top = 16.0
-offset_right = 520.0
+offset_right = 620.0
 offset_bottom = 40.0
 mouse_filter = 2
-text = "Generation de l'ile..."
+text = "Calcul de la carte..."
 
 [node name="HelpLabel" type="Label" parent="Hud"]
 anchors_preset = 2
@@ -64,7 +57,7 @@ anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 16.0
 offset_top = -60.0
-offset_right = 620.0
+offset_right = 640.0
 offset_bottom = -16.0
 grow_vertical = 0
 mouse_filter = 2
