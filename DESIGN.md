@@ -12,8 +12,18 @@ Deux joueurs sont coincés sur une immense plateforme flottante (ou île isolée
 — le lore exact reste ouvert). Le seul moyen de partir est de trouver un œuf
 de dragon, le protéger jusqu'à l'éclosion, élever le dragonneau, et s'envoler
 avec lui. Chaque partie se déroule sur une plateforme générée différemment :
-taille, biomes, emplacement de l'œuf et chaîne d'énigmes changent à chaque
-fois, donc une partie ne se "resoluce" pas par cœur.
+taille, biomes, emplacement de l'œuf, chaîne d'énigmes et régime alimentaire
+du dragon changent à chaque fois, donc une partie ne se "resoluce" pas par
+cœur. La quête (œuf, indices, dragon) est **partagée** entre les deux
+joueurs : ils voient et font progresser la même histoire, pas deux instances
+séparées.
+
+Le dragon ne peut porter qu'**un seul joueur** avant de pouvoir en porter
+deux. Ça crée un moment de tension volontaire en fin de partie : dès que le
+départ à un seul devient possible, les joueurs doivent décider s'ils
+tentent leur chance tout de suite ou s'ils tiennent encore le temps que le
+dragon grandisse assez pour les emporter tous les deux (voir "Vol et
+dressage").
 
 ## Piliers du jeu
 
@@ -29,6 +39,10 @@ fois, donc une partie ne se "resoluce" pas par cœur.
    du suivant. Le joueur ne doit (presque) jamais être bloqué sans piste.
 5. **Une partie dure 1 à plusieurs heures et se sauvegarde.** Ce n'est pas un
    run de 10 minutes : on doit pouvoir arrêter et reprendre.
+6. **Le dilemme final : partir tôt à un, ou attendre pour partir à deux.**
+   Le jeu ménage volontairement une fenêtre où un départ solo est possible
+   avant le départ à deux. C'est un moment fort à ne pas gâcher par un
+   mauvais calibrage (voir "Vol et dressage").
 
 ## Caméra et contrôles
 
@@ -56,15 +70,41 @@ fois, donc une partie ne se "resoluce" pas par cœur.
 - Taille : suffisamment grande pour justifier 1h+ d'exploration, mais bornée
   (pas de génération infinie type Minecraft — c'est une île/plateforme finie).
 
+## Flore et faune
+
+Sert un double usage : nourrir les joueurs, et nourrir le dragon (voir plus
+bas). Pour que ça marche avec la génération procédurale et le régime
+alimentaire aléatoire du dragon, chaque ressource comestible est décrite par
+des **tags** plutôt que par une liste figée d'espèces :
+
+- Tags de nature : `fruit`, `champignon`, `racine`, `poisson`, `viande`,
+  `insecte`, `œuf-d'oiseau` (à ne pas confondre avec l'œuf de dragon).
+- Tags de biome : chaque plante/animal n'apparaît que dans les biomes
+  compatibles (poisson → point d'eau, champignon → grotte/sous-bois, etc.),
+  cohérent avec le système de biomes déjà décrit.
+- Une même ressource peut porter plusieurs tags (ex. un poisson est à la
+  fois `poisson` et `viande`).
+
+Comportement de la faune (proposition de départ, à valider ensemble) :
+principalement **passive/fuyante** (elle s'enfuit quand on l'approche, il
+faut la traquer ou la piéger) plutôt qu'hostile, pour rester cohérent avec un
+jeu où la pression vient surtout de la survie et de la quête, pas du combat.
+Une variante hostile reste une option pour plus tard (voir "Questions
+ouvertes").
+
+Récolte : cueillette pour la flore, chasse/pêche pour la faune. Certaines
+ressources rares peuvent elles-mêmes faire partie d'un gabarit d'énigme
+(ex. "il faut trouver le poisson qui ne vit que près de la falaise rouge"),
+ce qui relie naturellement ce système à celui des artefacts.
+
 ## Boucle de survie
 
 - **Faim / soif** : jauges qui descendent avec le temps et l'effort (courir,
-  creuser). Se reconstituent en mangeant (baies, viande cuite, fruits) et
-  buvant (point d'eau, ou eau bouillie/plus sûre).
+  creuser). Se reconstituent en mangeant (flore/faune récoltée, cuite ou non
+  selon la ressource) et buvant (point d'eau, ou eau bouillie/plus sûre).
 - **Cycle jour/nuit** : la nuit est plus dangereuse (froid accru, visibilité
-  réduite, éventuellement faune hostile à discuter). Durée d'un cycle à
-  calibrer en playtest (proposition de départ : ~15-20 min réelles par cycle
-  complet).
+  réduite). Durée d'un cycle à calibrer en playtest (proposition de départ :
+  ~15-20 min réelles par cycle complet).
 - **Température / intempéries** : le froid la nuit ou sous la pluie draine
   une jauge de "confort/chaleur" ; s'abriter (cabane, feu) la restaure.
 - **Sommeil** : dormir dans un abri fait passer la nuit plus vite et/ou
@@ -113,6 +153,10 @@ paramétrable (position, objet requis, texte d'indice). À chaque partie :
 4. Les textes d'indice utilisent les noms des lieux/repères *générés* pour
    cette partie (voir "repères nommés" ci-dessous), donc le texte reste
    cohérent même si le monde change.
+5. Une récompense de gabarit n'est pas forcément un indice de lieu : ça peut
+   aussi être un indice sur le **régime alimentaire du dragon** (voir plus
+   bas), un outil, ou une ressource rare. Ça évite que la chaîne ne soit
+   qu'une suite de "va au point suivant".
 
 ### Gabarits proposés (liste de départ, à enrichir)
 
@@ -132,6 +176,11 @@ paramétrable (position, objet requis, texte d'indice). À chaque partie :
 - **Le message à décrypter** : une carte fragmentaire ou un texte à
   reconstituer à partir de 2-3 fragments trouvés séparément (pousse à
   explorer plusieurs zones avant de pouvoir agir).
+- **Le carnet du gardien** : un journal ou une gravure qui ne donne pas un
+  lieu mais un indice sur le **régime alimentaire du dragon** de cette
+  partie (ex. "les anciens nourrissaient leurs dragons de poisson et de
+  baies, jamais de viande"). Peut apparaître à n'importe quel maillon de la
+  chaîne, pas seulement à la fin.
 
 Chaque nouveau gabarit qu'on ajoute doit préciser : biomes valides, objet(s)
 requis pour le résoudre, et le format du texte d'indice qu'il génère pour la
@@ -159,6 +208,66 @@ cohérents sans être écrits à la main pour chaque partie.
 - Il grandit visiblement par étapes (au moins 2-3 stades visuels) pour que le
   joueur voie sa progression.
 
+### Le régime alimentaire du dragon
+
+Demande explicite : **chaque partie, le dragon a un régime différent**, à
+découvrir en jouant plutôt qu'à connaître à l'avance. Ça réutilise le
+système de tags de la flore/faune :
+
+- À la génération de la partie, on tire un **profil alimentaire** pour ce
+  dragon : par exemple 1-2 tags "adorés" (croissance forte), 1-2 tags
+  "tolérés" (croissance faible/neutre), le reste "refusés" (aucune
+  croissance, le dragon recrache/ignore). Les tags viennent de la même liste
+  que la flore/faune (`fruit`, `poisson`, `viande`, `insecte`, etc.).
+- **Découverte** : essentiellement par essai-erreur avec un retour clair
+  (réaction visuelle/sonore différente selon que le dragon adore, tolère ou
+  refuse), complété éventuellement par un indice de type "carnet du
+  gardien" (voir gabarits ci-dessus) qui donne une longueur d'avance sans
+  être obligatoire.
+- **Croissance** : chaque repas "aimé" fait avancer une jauge de croissance
+  cumulée ; passer un palier de cette jauge fait passer le dragon au stade
+  visuel suivant. La croissance est donc pilotée par *ce qu'on lui donne à
+  manger*, pas seulement par le temps passé.
+- **Tension avec la survie du joueur** : la nourriture est une ressource
+  partagée entre le joueur et le dragon. Si le tag préféré du dragon est
+  rare sur cette plateforme (ex. un poisson qui ne vit que dans une seule
+  zone), nourrir le dragon devient un vrai objectif d'exploration, pas
+  juste un menu à cocher. C'est un levier d'équilibrage à calibrer en
+  playtest : le régime ne doit pas tomber uniquement sur des ressources
+  quasi introuvables.
+
+### Vol et dressage
+
+La capacité de vol du dragon est liée à ses stades de croissance (voir
+ci-dessus), avec au moins ces paliers :
+
+1. **Nouveau-né** : ne vole pas. Suit/se laisse porter, se nourrit.
+2. **Juvénile** : peut voler, mais sans passager. C'est le stade où
+   commence le **dressage**.
+3. **Adolescent** : peut porter **un seul joueur** en vol → premier moment
+   où un départ (partiel) devient possible.
+4. **Adulte** : peut porter **les deux joueurs** → condition de victoire
+   complète du jeu.
+
+**Dressage** : une fois le dragon capable de voler (stade 2), les joueurs
+débloquent des séances d'entraînement guidées par des consignes en jeu
+(ex. "traverse les 5 anneaux avant la fin du temps", "pose-toi précisément
+sur la zone marquée", "suis le joueur qui court en contrebas"). Réussir des
+séances fait progresser une jauge de dressage distincte de la croissance
+"nutrition" ; il faut probablement un minimum des deux (bien nourri *et*
+bien dressé) pour débloquer le passage au stade suivant, plutôt qu'un seul
+critère — sinon un joueur pourrait suffisamment gaver le dragon en ignorant
+le dressage, ou l'inverse.
+
+**Le dilemme du départ** : dès le stade 3, techniquement un des deux joueurs
+pourrait s'envoler et terminer la partie en laissant l'autre sur la
+plateforme. C'est une tension voulue, mais il faut décider ensemble
+comment le jeu la traite (voir "Questions ouvertes") : le permettre
+franchement (avec une fin "amère" dédiée si un joueur part seul), ou exiger
+un accord des deux joueurs pour déclencher un départ, ce qui transforme le
+dilemme en décision collective ("on tente le solo maintenant ou on attend
+ensemble ?") plutôt qu'en trahison possible d'un joueur envers l'autre.
+
 ## Sauvegarde
 
 Doit persister au minimum :
@@ -169,6 +278,9 @@ Doit persister au minimum :
 - la progression de la quête (quels artefacts trouvés, quel indice actif),
 - l'état de l'œuf/dragon (pas trouvé / en incubation / éclos + stade de
   croissance),
+- le régime alimentaire tiré pour le dragon (tags aimés/tolérés/refusés) et
+  ce que les joueurs en ont déjà découvert,
+- la jauge de dressage/vol du dragon,
 - le jour/l'heure en cours du cycle jour/nuit.
 
 Format exact (JSON, fichier de ressource Godot, autre) à trancher pendant
@@ -192,6 +304,13 @@ valable, mais `scenes/player` et `scenes/world` vont être largement réécrits.
 À discuter ensemble avant de commencer pour éviter que chacun parte sur une
 architecture voxel différente (voir `TASKS.md`).
 
+Point technique important induit par la quête **partagée** : il ne suffira
+pas de synchroniser la position des joueurs comme dans le prototype actuel.
+Il faudra aussi synchroniser l'état du monde (voxels modifiés), la
+progression de la quête, et l'état du dragon entre les deux pairs — l'hôte
+fera probablement autorité sur ces données, un peu comme il l'est déjà pour
+le spawn des joueurs.
+
 ## Portée et étapes proposées
 
 Le scope complet est ambitieux pour deux personnes ; l'idée est d'avancer par
@@ -209,9 +328,11 @@ bloc :
    encore fixe, pour valider le système d'indices avant de le généraliser.
 7. **Génération de la chaîne de quête + repères nommés** (le vrai "chaque
    partie est différente").
-8. **Œuf, éclosion, élevage, condition de victoire.**
-9. **Sauvegarde/chargement.**
-10. Polish, équilibrage, playtests à deux.
+8. **Œuf, éclosion, élevage (régime alimentaire, croissance).**
+9. **Dressage et vol, paliers de capacité de transport, condition de
+   victoire (solo puis à deux).**
+10. **Sauvegarde/chargement.**
+11. Polish, équilibrage, playtests à deux.
 
 Rien n'empêche de paralléliser certaines étapes entre les deux
 développeurs une fois l'architecture de base (étapes 0-2) posée — c'est
@@ -221,12 +342,12 @@ justement l'objet de `TASKS.md`.
 
 - Style visuel des voxels (taille de bloc, style graphique — cube "Minecraft"
   franc ou plus stylisé/lissé) ?
-- En multijoueur, le monde et l'état de la quête sont-ils **partagés** (les
-  deux joueurs voient le même œuf/même chaîne d'indices) ou bien
-  chacun a-t-il sa propre instance synchronisée seulement pour les
-  positions ? (Partagé semble plus fidèle au pitch "coincés ensemble", mais
-  complexifie la synchronisation réseau des voxels.)
-- Y a-t-il une faune (hostile ou non) sur la plateforme, ou le seul danger
-  est environnemental (faim/froid/chutes) ?
+- **Départ solo au stade 3 (voir "Vol et dressage")** : le jeu le permet
+  franchement (avec une fin dédiée si un joueur part seul et laisse l'autre)
+  ou bien exige un accord des deux joueurs pour déclencher tout départ ?
+  Choix de ton important, à trancher ensemble avant d'implémenter la
+  condition de victoire.
+- La faune est-elle uniquement passive/fuyante (proposition actuelle, voir
+  "Flore et faune"), ou certaines créatures sont-elles hostiles ?
 - Sur quelle plateforme veut-on distribuer le jeu au final (juste vous deux
   en LAN/VPN, ou export public) ? Impacte les priorités de polish.
