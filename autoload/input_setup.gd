@@ -45,6 +45,7 @@ const ACTIONS: Array[Dictionary] = [
 	{"action": "jump", "label": "Sauter, ou monter en vol", "default": KEY_SPACE},
 	{"action": "sprint", "label": "Courir, ou descendre en vol", "default": KEY_SHIFT},
 	{"action": "toggle_fly", "label": "Basculer vol / marche", "default": KEY_F},
+	{"action": "toggle_inventory", "label": "Ouvrir/fermer l'inventaire", "default": KEY_I},
 ]
 
 

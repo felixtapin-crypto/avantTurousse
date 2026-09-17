@@ -41,6 +41,10 @@ const REACH := 8.0
 const BUILD_SAFETY_MARGIN := 1.0
 
 signal edit_refused(reason: String)
+# Le joueur ne sait pas construire/detruire l'ecran d'inventaire (qui vit
+# dans le monde, voir `SmoothVoxelWorld._build_inventory_screen`) : il se
+# contente de signaler la demande, meme principe que `edit_refused`.
+signal inventory_toggle_requested
 
 @onready var camera: Camera3D = $Camera3D
 
@@ -61,12 +65,7 @@ var brush_radius := 2.5
 # pinceau (`brush_radius`) est deja l'unite de matiere que `_edit` manipule a
 # chaque coup, compter par coup plutot que tenter d'estimer un volume de SDF
 # reellement retire donne directement le meme repere des deux cotes.
-#
-# Faible au depart pour que la contrainte se sente (revenir deverser avant de
-# pouvoir recreuser) — une capacite qui grandit avec un outil trouve est une
-# suite naturelle, pas encore faite.
-const CARRY_CAPACITY := 8
-var carried := 0
+var inventory := Inventory.new()
 
 var flying := true
 
@@ -92,6 +91,10 @@ var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	# Requis par `ItemPickup` (cherche un porteur via ce groupe), et compatible
+	# avec la convention "players" deja utilisee par l'ancien prototype si un
+	# second joueur visible arrive un jour.
+	add_to_group("players")
 	# La camera ignore la transformee du corps : c'est le rig qui la place, en
 	# coordonnees monde. Voir l'avertissement en tete de `player_camera.gd`.
 	camera.top_level = true
@@ -152,6 +155,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("toggle_fly") and not event.is_echo():
 		flying = not flying
 		velocity = Vector3.ZERO
+		return
+
+	if event.is_action_pressed("toggle_inventory") and not event.is_echo():
+		inventory_toggle_requested.emit()
+		return
+
+	# Selection de case LUE EN DUR (comme la molette pour le zoom camera, voir
+	# `_on_mouse_button`) : ce ne sont pas des commandes de deplacement, juste
+	# un raccourci de position sur le clavier, pas encore reaffectable.
+	if event is InputEventKey and event.pressed and not event.echo:
+		var key := (event as InputEventKey).physical_keycode
+		if key >= KEY_1 and key <= KEY_9:
+			inventory.select(key - KEY_1)
 
 
 # Le bouton droit ne pilote plus la camera (elle tourne en permanence, voir
@@ -261,10 +277,10 @@ func _edit(remove: bool) -> void:
 		edit_refused.emit("Zone pas encore chargee.")
 		return
 
-	if remove and carried >= CARRY_CAPACITY:
+	if remove and not inventory.has_room(ItemCatalog.Id.DIRT):
 		edit_refused.emit("Inventaire plein — direction un depot.")
 		return
-	if not remove and carried <= 0:
+	if not remove and inventory.count(ItemCatalog.Id.DIRT) <= 0:
 		edit_refused.emit("Rien a deverser.")
 		return
 
@@ -283,7 +299,10 @@ func _edit(remove: bool) -> void:
 
 	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
 	voxel_tool.do_sphere(center, brush_radius)
-	carried += 1 if remove else -1
+	if remove:
+		inventory.add(ItemCatalog.Id.DIRT, 1)
+	else:
+		inventory.remove(ItemCatalog.Id.DIRT, 1)
 
 	# UN DEPOT SORT DE TERRE, PAS D'HERBE.
 	#
