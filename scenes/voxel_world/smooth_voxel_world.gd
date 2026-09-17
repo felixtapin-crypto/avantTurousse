@@ -26,6 +26,14 @@ var _local_player: CharacterBody3D
 # qu'appliquer la liste qu'il leur envoie. Voir `_setup_players`.
 var _present := {}
 
+# Les objets au sol, dans l'ordre de leur distribution. Voir `_scatter_items` :
+# ce rang est leur identite sur le reseau.
+var _pickups: Array[ItemPickup] = []
+
+# Les rangs deja ramasses. Tenu par l'hote, qui arbitre, et renvoye entier a
+# qui arrive en cours de partie. Voir `request_pickup`.
+var _taken := {}
+
 var _exit_bar: Control
 var _exit_fill: ColorRect
 var _exit_label: Label
@@ -132,12 +140,18 @@ func _ready() -> void:
 	_tool.channel = VoxelBuffer.CHANNEL_SDF
 
 	_build_terrain_sync()
+	# LES OBJETS AVANT LES JOUEURS, et l'ordre compte.
+	#
+	# Entrer dans le monde, c'est s'annoncer a l'hote, qui repond aussitot avec
+	# la liste de ce qui a deja ete ramasse. Si les objets n'etaient pas encore
+	# poses, cette liste ne trouverait rien a retirer et l'arrivant garderait des
+	# cailloux fantomes que d'autres ont deja pris.
+	_scatter_items()
 	_setup_players()
 
 	_add_sky()
 	_add_sea()
 	_add_rivers()
-	_scatter_items()
 
 	# L'hote annonce SON monde en entrant en partie, et pas avant : c'est ici
 	# que ses reglages sont arretes. Un client connecte plus tot patiente sur
@@ -195,8 +209,21 @@ func _setup_players() -> void:
 func _entered_world() -> void:
 	if not multiplayer.is_server():
 		return
-	_present[multiplayer.get_remote_sender_id()] = true
+	var newcomer := multiplayer.get_remote_sender_id()
+	_present[newcomer] = true
 	_publish_roster()
+	# CE QUI A DEJA ETE RAMASSE, en une fois. L'arrivant vient de redistribuer
+	# les objets a partir de la graine, donc il les a TOUS, y compris ceux que
+	# les autres ont pris avant lui. Sans cette liste il verrait des cailloux
+	# fantomes, et les ramasserait une seconde fois.
+	if not _taken.is_empty():
+		_set_taken_pickups.rpc_id(newcomer, _taken.keys())
+
+
+@rpc("authority", "call_remote", "reliable")
+func _set_taken_pickups(indices: Array) -> void:
+	for index in indices:
+		_remove_pickup(int(index))
 
 
 func _publish_roster() -> void:
@@ -701,6 +728,88 @@ func _ask_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
 	_publish_terrain_edit(center, radius, remove)
 
 
+# ===========================================================================
+# UN OBJET NE SE RAMASSE QU'UNE FOIS
+# ===========================================================================
+#
+# Les objets sont tires de la GRAINE : les deux joueurs voient les memes
+# cailloux aux memes endroits. Tant que le ramassage se decidait sur place,
+# tous deux pouvaient prendre LE MEME — chacun en obtenait un, et il ne
+# disparaissait que pour celui qui l'avait touche.
+#
+# L'hote tranche donc, comme pour le creusement, et pour la meme raison : c'est
+# le seul endroit d'ou l'on puisse dire « celui-la est deja pris » avec autorite.
+# La difference avec le terrain est qu'ici il faut aussi dire A QUI il revient —
+# un creusement n'appartient a personne, un caillou si.
+#
+# Le contact est detecte CHEZ CELUI QUI MARCHE DESSUS, pas chez l'hote : le
+# groupe « players » ne contient que le corps qu'on pilote, donc chacun ne
+# declenche que ses propres ramassages, et l'hote n'a pas a surveiller les
+# allees et venues de tout le monde.
+func request_pickup(index: int) -> void:
+	var pickup := _pickup_at(index)
+	if pickup == null:
+		return
+	# L'inventaire PLEIN se constate chez soi : c'est le sien, l'hote n'a pas a
+	# le connaitre, et rien ne sert de demander ce qu'on ne pourrait pas porter.
+	if _local_player == null or not _local_player.inventory.has_room(pickup.item_id):
+		_notify("Inventaire plein.")
+		return
+
+	if Network.is_online() and not multiplayer.is_server():
+		_ask_pickup.rpc_id(1, index)
+		return
+	_award_pickup(index, multiplayer.get_unique_id())
+
+
+@rpc("any_peer", "reliable")
+func _ask_pickup(index: int) -> void:
+	if not multiplayer.is_server():
+		return
+	_award_pickup(index, multiplayer.get_remote_sender_id())
+
+
+# Cote hote : le premier arrive l'emporte, les suivants ne recoivent rien.
+func _award_pickup(index: int, to_peer: int) -> void:
+	if _taken.has(index) or _pickup_at(index) == null:
+		return
+	_taken[index] = to_peer
+	if Network.is_online():
+		_pickup_awarded.rpc(index, to_peer)
+	_pickup_awarded(index, to_peer)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _pickup_awarded(index: int, to_peer: int) -> void:
+	var pickup := _pickup_at(index)
+	if pickup == null:
+		return
+	# L'OBJET DISPARAIT CHEZ TOUT LE MONDE, il n'entre que chez un seul.
+	var item_id := pickup.item_id
+	_remove_pickup(index)
+	if to_peer != multiplayer.get_unique_id() or _local_player == null:
+		return
+	_local_player.inventory.add(item_id, 1)
+	_notify("Ramasse : %s." % ItemCatalog.display_name(item_id))
+
+
+func _pickup_at(index: int) -> ItemPickup:
+	if index < 0 or index >= _pickups.size():
+		return null
+	var pickup := _pickups[index]
+	return pickup if is_instance_valid(pickup) else null
+
+
+# La case reste dans le tableau, videe : c'est le RANG qui identifie l'objet sur
+# le reseau, et le decaler renommerait tous les suivants.
+func _remove_pickup(index: int) -> void:
+	var pickup := _pickup_at(index)
+	if pickup == null:
+		return
+	_pickups[index] = null
+	pickup.queue_free()
+
+
 func _apply_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
 	if _tool == null:
 		return
@@ -1087,11 +1196,17 @@ func _spawn_pickup_near_spawn(rng: RandomNumberGenerator, item_id: int, radius: 
 
 		var pickup := ItemPickup.new()
 		pickup.item_id = item_id
+		# LE RANG EST L'IDENTITE de l'objet sur le reseau. La distribution se
+		# rejoue a l'identique chez chaque pair — meme graine, meme carte, meme
+		# ordre d'appel — donc le rang designe partout le meme caillou, sans
+		# qu'on ait a en decrire la position.
+		pickup.index = _pickups.size()
+		pickup.name = "pickup_%d" % pickup.index
 		pickup.position = Vector3(
 			float(x) + 0.5, float(map.terrain_height(x, z)) + 0.5, float(z) + 0.5)
-		pickup.picked_up.connect(func(_id): _notify("Ramasse : %s." % ItemCatalog.display_name(item_id)))
-		pickup.pickup_refused.connect(_notify)
+		pickup.pickup_requested.connect(request_pickup)
 		add_child(pickup)
+		_pickups.append(pickup)
 		return
 
 
