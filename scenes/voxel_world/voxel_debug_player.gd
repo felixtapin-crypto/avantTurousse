@@ -1,3 +1,4 @@
+class_name VoxelDebugPlayer
 extends CharacterBody3D
 
 # Controleur de TEST, volontairement separe du vrai joueur
@@ -33,6 +34,12 @@ const JUMP_VELOCITY := 5.5
 # varier la portee avec le zoom.
 const REACH := 8.0
 
+# Marge ajoutee au rayon du pinceau pour refuser un depot trop proche du
+# corps (capsule de rayon 0.4, hauteur 1.8 — voir `_edit`). Genereuse plutot
+# que calculee au plus juste sur la capsule exacte : le but est d'etre
+# largement en dehors de tout chevauchement, pas de raser la limite.
+const BUILD_SAFETY_MARGIN := 1.0
+
 signal edit_refused(reason: String)
 
 @onready var camera: Camera3D = $Camera3D
@@ -49,6 +56,17 @@ var voxel_tool: VoxelTool
 # abri, ce qui est nettement moins naturel au pinceau spherique, et reste a
 # retrancher (voir issue #34).
 var brush_radius := 2.5
+
+# Un creusement REUSSI vaut UNE unite portee, et un depot EN COUTE une : le
+# pinceau (`brush_radius`) est deja l'unite de matiere que `_edit` manipule a
+# chaque coup, compter par coup plutot que tenter d'estimer un volume de SDF
+# reellement retire donne directement le meme repere des deux cotes.
+#
+# Faible au depart pour que la contrainte se sente (revenir deverser avant de
+# pouvoir recreuser) — une capacite qui grandit avec un outil trouve est une
+# suite naturelle, pas encore faite.
+const CARRY_CAPACITY := 8
+var carried := 0
 
 var flying := true
 
@@ -207,12 +225,6 @@ func _physics_process(delta: float) -> void:
 # une sphere, et le mailleur replace la surface la ou la distance signee
 # change de signe.
 #
-# LE RAYON PART DU CURSEUR, et non de l'axe de l'objectif. En vue subjective
-# les deux se confondaient — le centre de l'ecran etait le regard. En vue
-# d'epaule, l'axe de l'objectif passe par la nuque du personnage et vise, a
-# quatre metres de la, un point sans rapport avec ce qu'on montre. Le curseur
-# etant libre, autant s'en servir pour designer.
-#
 # La bedrock n'est pas protegee ici, et ne peut pas l'etre bloc par bloc : le
 # pinceau en couvre plusieurs a la fois. En terrain lisse, la bonne facon de
 # la rendre increusable est de borner la distance signee dans le generateur —
@@ -249,8 +261,89 @@ func _edit(remove: bool) -> void:
 		edit_refused.emit("Zone pas encore chargee.")
 		return
 
+	if remove and carried >= CARRY_CAPACITY:
+		edit_refused.emit("Inventaire plein — direction un depot.")
+		return
+	if not remove and carried <= 0:
+		edit_refused.emit("Rien a deverser.")
+		return
+
+	# UN DEPOT NE PEUT PAS CHEVAUCHER LE PERSONNAGE.
+	#
+	# Materialiser une sphere solide a l'interieur de la capsule de collision
+	# force le moteur physique a l'en ejecter d'un coup, assez fort pour
+	# traverser le reste du terrain et tomber hors de la carte (constate en
+	# jeu). Creuser sous ses pieds ne pose pas ce probleme — enlever de la
+	# matiere ne pousse rien, ca laisse juste tomber normalement.
+	if not remove:
+		var body_center := global_position + Vector3.UP * 0.9
+		if center.distance_to(body_center) < brush_radius + BUILD_SAFETY_MARGIN:
+			edit_refused.emit("Trop pres de vous.")
+			return
+
 	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
 	voxel_tool.do_sphere(center, brush_radius)
+	carried += 1 if remove else -1
+
+	# UN DEPOT SORT DE TERRE, PAS D'HERBE.
+	#
+	# `do_sphere` en MODE_ADD ne touche que le canal SDF (la geometrie) : la
+	# matiere des voxels nouvellement solides reste a sa valeur par defaut, qui
+	# se trouve etre GRASS (index 0). On la force a DIRT juste apres le
+	# sculptage. Creuser n'a pas besoin de cette etape : la coupe expose la
+	# stratification deja posee par `TerrainGenerator` (terre puis roche en
+	# profondeur).
+	#
+	# MODE_TEXTURE_PAINT (le mode dedie, texture_index/texture_opacity) ne
+	# produisait aucun changement visible a l'essai — plutot que d'insister sur
+	# une API non documentee, `_paint_single_material` ecrit DIRECTEMENT les
+	# canaux INDICES/WEIGHTS avec le meme encodage que celui deja utilise, et
+	# deja verifie a l'ecran, par `TerrainGenerator._single_material`.
+	if not remove:
+		_paint_single_material(center, brush_radius, TerrainGenerator.Layer.DIRT)
+		_regrow_grass(center, brush_radius)
+
+
+# Repousse de l'herbe sur un depot laisse a l'air libre, avec le temps.
+#
+# Duree a calibrer en playtest (voir `FarmPlot.GROWTH_DURATION` pour le meme
+# genre de reglage sur l'ancien prototype). Repeindre en herbe un depot qui
+# a ete recreuse entretemps ne fait rien de visible : sans matiere solide la,
+# la peinture ne colore aucune surface.
+const GRASS_REGROWTH_SECONDS := 60.0
+
+
+func _regrow_grass(center: Vector3, radius: float) -> void:
+	await get_tree().create_timer(GRASS_REGROWTH_SECONDS).timeout
+	if voxel_tool == null:
+		return
+	_paint_single_material(center, radius, TerrainGenerator.Layer.GRASS)
+
+
+# Peint une sphere d'une SEULE matiere, avec le meme encodage que
+# `TerrainGenerator._single_material` : quatre index CONSECUTIFS a partir de
+# 0 (l'ordre depend seulement de `layer`, jamais de ce qu'il y avait avant),
+# et tout le poids sur celui qui correspond a `layer`. Ne marche que pour
+# `layer` < 4 (vrai pour GRASS et DIRT, les deux seuls cas d'usage ici) — au
+# dela l'ordre des quatre index consecutifs changerait la position du poids.
+func _paint_single_material(center: Vector3, radius: float, layer: int) -> void:
+	var indices := VoxelTool.vec4i_to_u16_indices(Vector4i(0, 1, 2, 3))
+	var weights := [0.0, 0.0, 0.0, 0.0]
+	weights[layer] = 1.0
+	var packed_weights := VoxelTool.color_to_u16_weights(
+		Color(weights[0], weights[1], weights[2], weights[3]))
+
+	voxel_tool.channel = VoxelBuffer.CHANNEL_INDICES
+	voxel_tool.mode = VoxelTool.MODE_SET
+	voxel_tool.value = indices
+	voxel_tool.do_sphere(center, radius)
+
+	voxel_tool.channel = VoxelBuffer.CHANNEL_WEIGHTS
+	voxel_tool.value = packed_weights
+	voxel_tool.do_sphere(center, radius)
+
+	# Le reste de `_edit` (et le raycast) suppose le canal SDF actif.
+	voxel_tool.channel = VoxelBuffer.CHANNEL_SDF
 
 
 # ===========================================================================
