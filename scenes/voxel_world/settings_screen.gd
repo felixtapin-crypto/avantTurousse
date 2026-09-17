@@ -223,7 +223,7 @@ func _build_controls() -> void:
 		GameSettings.SENSITIVITY_MIN, GameSettings.SENSITIVITY_MAX, 0.0002,
 		set_sensitivity))
 	mouse.add_child(_hint(
-		"S'applique au glisse du bouton droit, qui fait tourner la camera."))
+		"S'applique au mouvement de la souris, qui fait tourner la camera."))
 
 	var keys := _section("TOUCHES  ·  CLIQUEZ POUR REAFFECTER")
 	for entry in InputSetup.ACTIONS:
