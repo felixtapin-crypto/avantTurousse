@@ -289,15 +289,18 @@ func _edit(remove: bool) -> void:
 	#
 	# `do_sphere` en MODE_ADD ne touche que le canal SDF (la geometrie) : la
 	# matiere des voxels nouvellement solides reste a sa valeur par defaut, qui
-	# se trouve etre GRASS (index 0). Un peinturage explicite en
-	# MODE_TEXTURE_PAINT force la couche a DIRT juste apres le sculptage.
-	# Creuser n'a pas besoin de cette etape : la coupe expose la stratification
-	# deja posee par `TerrainGenerator` (terre puis roche en profondeur).
+	# se trouve etre GRASS (index 0). On la force a DIRT juste apres le
+	# sculptage. Creuser n'a pas besoin de cette etape : la coupe expose la
+	# stratification deja posee par `TerrainGenerator` (terre puis roche en
+	# profondeur).
+	#
+	# MODE_TEXTURE_PAINT (le mode dedie, texture_index/texture_opacity) ne
+	# produisait aucun changement visible a l'essai — plutot que d'insister sur
+	# une API non documentee, `_paint_single_material` ecrit DIRECTEMENT les
+	# canaux INDICES/WEIGHTS avec le meme encodage que celui deja utilise, et
+	# deja verifie a l'ecran, par `TerrainGenerator._single_material`.
 	if not remove:
-		voxel_tool.mode = VoxelTool.MODE_TEXTURE_PAINT
-		voxel_tool.texture_index = TerrainGenerator.Layer.DIRT
-		voxel_tool.texture_opacity = 1.0
-		voxel_tool.do_sphere(center, brush_radius)
+		_paint_single_material(center, brush_radius, TerrainGenerator.Layer.DIRT)
 		_regrow_grass(center, brush_radius)
 
 
@@ -306,7 +309,7 @@ func _edit(remove: bool) -> void:
 # Duree a calibrer en playtest (voir `FarmPlot.GROWTH_DURATION` pour le meme
 # genre de reglage sur l'ancien prototype). Repeindre en herbe un depot qui
 # a ete recreuse entretemps ne fait rien de visible : sans matiere solide la,
-# le peinturage ne colore aucune surface.
+# la peinture ne colore aucune surface.
 const GRASS_REGROWTH_SECONDS := 60.0
 
 
@@ -314,10 +317,33 @@ func _regrow_grass(center: Vector3, radius: float) -> void:
 	await get_tree().create_timer(GRASS_REGROWTH_SECONDS).timeout
 	if voxel_tool == null:
 		return
-	voxel_tool.mode = VoxelTool.MODE_TEXTURE_PAINT
-	voxel_tool.texture_index = TerrainGenerator.Layer.GRASS
-	voxel_tool.texture_opacity = 1.0
+	_paint_single_material(center, radius, TerrainGenerator.Layer.GRASS)
+
+
+# Peint une sphere d'une SEULE matiere, avec le meme encodage que
+# `TerrainGenerator._single_material` : quatre index CONSECUTIFS a partir de
+# 0 (l'ordre depend seulement de `layer`, jamais de ce qu'il y avait avant),
+# et tout le poids sur celui qui correspond a `layer`. Ne marche que pour
+# `layer` < 4 (vrai pour GRASS et DIRT, les deux seuls cas d'usage ici) — au
+# dela l'ordre des quatre index consecutifs changerait la position du poids.
+func _paint_single_material(center: Vector3, radius: float, layer: int) -> void:
+	var indices := VoxelTool.vec4i_to_u16_indices(Vector4i(0, 1, 2, 3))
+	var weights := [0.0, 0.0, 0.0, 0.0]
+	weights[layer] = 1.0
+	var packed_weights := VoxelTool.color_to_u16_weights(
+		Color(weights[0], weights[1], weights[2], weights[3]))
+
+	voxel_tool.channel = VoxelBuffer.CHANNEL_INDICES
+	voxel_tool.mode = VoxelTool.MODE_SET
+	voxel_tool.value = indices
 	voxel_tool.do_sphere(center, radius)
+
+	voxel_tool.channel = VoxelBuffer.CHANNEL_WEIGHTS
+	voxel_tool.value = packed_weights
+	voxel_tool.do_sphere(center, radius)
+
+	# Le reste de `_edit` (et le raycast) suppose le canal SDF actif.
+	voxel_tool.channel = VoxelBuffer.CHANNEL_SDF
 
 
 # ===========================================================================
