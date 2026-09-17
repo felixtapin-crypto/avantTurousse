@@ -48,6 +48,7 @@ func _initialize() -> void:
 	failures += _check_mesh_carries_materials(map)
 	failures += _check_surface_materials(map)
 	failures += _check_rivers(map)
+	failures += _check_river_splines(map)
 	failures += _check_caves(map)
 
 	# Plusieurs tailles et plusieurs seeds : un biome peut sortir sur une carte
@@ -598,6 +599,266 @@ func _dominant_layer(packed_indices: float, packed_weights: float) -> int:
 			best = indices[slot]
 	return best
 
+
+
+# L'emprise des rivieres : le contour du creusement et la surface qu'il
+# delimite.
+func _check_river_splines(map: WorldMap) -> int:
+	print("\n--- emprise des rivieres ---")
+	var splines := RiverSplines.new()
+	splines.setup(map)
+	return _check_river_outlines(map, splines)
+
+
+# Le contour des berges doit TOUCHER le terrain, etre ferme, et se tenir en
+# HAUT du talus.
+#
+# Les trois sont la demande, et le premier est celui qui ne se voit pas :
+# quelques centimetres de decollement passent inapercus a l'ecran et trahissent
+# pourtant tout ce qui voudrait s'appuyer dessus. On mesure donc l'ecart entre
+# chaque point de controle et le sol sous lui.
+#
+# « En haut du talus » se mesure par comparaison avec le FOND : un contour qui
+# aurait glisse dans le chenal serait au niveau du lit, pas plusieurs metres
+# au-dessus.
+func _check_river_outlines(map: WorldMap, splines: RiverSplines) -> int:
+	var outlines := splines.find_children("Berges*", "Path3D", false, false)
+	print("  %d contours de berge, %d points de controle au total"
+		% [outlines.size(), _control_points(outlines)])
+
+	# Le nombre de contours n'est PAS celui des rivieres : deux rivieres qui se
+	# rejoignent ne creusent qu'une seule region, donc ne bordent qu'un seul
+	# contour. On attend donc nettement moins de boucles que de tronçons — si
+	# les deux nombres se rapprochaient, c'est que les contours auraient cesse
+	# de fusionner.
+	var failures := 0
+	if outlines.is_empty():
+		printerr("  aucun contour de berge")
+		return 1
+	if outlines.size() >= map.rivers.path_count():
+		printerr("  %d contours pour %d rivieres : ils ne fusionnent pas aux confluences"
+			% [outlines.size(), map.rivers.path_count()])
+		failures += 1
+
+	var points := 0
+	var detached := 0
+	var worst_gap := 0.0
+	var gap_total := 0.0
+	var open_loops := 0
+	var in_channel := 0
+	var rise_total := 0.0
+
+	for node in outlines:
+		var curve: Curve3D = (node as Path3D).curve
+		if curve == null or curve.point_count < 4:
+			printerr("  un contour est trop court pour delimiter quoi que ce soit")
+			failures += 1
+			continue
+		# Ferme : le dernier point revient sur le premier.
+		if curve.get_point_position(0).distance_to(
+				curve.get_point_position(curve.point_count - 1)) > 0.01:
+			open_loops += 1
+
+		for i in curve.point_count:
+			var point := curve.get_point_position(i)
+			points += 1
+			var gap := absf(point.y - _ground_f(map, point.x, point.z))
+			gap_total += gap
+			worst_gap = maxf(worst_gap, gap)
+			if gap > OUTLINE_CONTACT:
+				detached += 1
+
+	# Hauteur du contour au-dessus du fond voisin : c'est ce qui distingue une
+	# crete de berge d'un trait tombe dans le lit.
+	#
+	# Le fond se lit sur le TERRAIN et non sur un axe de riviere — un contour
+	# fusionne n'appartient plus a une riviere en particulier, et il n'existe de
+	# toute facon plus d'axe depuis que le repere cyan a ete retire. Le point le
+	# plus bas du voisinage est le fond du chenal que le contour longe.
+	var compared := 0
+	for node in outlines:
+		var outline: Curve3D = (node as Path3D).curve
+		if outline == null:
+			continue
+		for i in outline.point_count:
+			var point := outline.get_point_position(i)
+			var bed := INF
+			for dz in range(-BED_LOOKUP, BED_LOOKUP + 1):
+				for dx in range(-BED_LOOKUP, BED_LOOKUP + 1):
+					bed = minf(bed, map.terrain_height_f(
+						roundi(point.x) + dx, roundi(point.z) + dz))
+			if bed == INF:
+				continue
+			compared += 1
+			var rise := point.y - bed
+			rise_total += rise
+			if rise < 0.4:
+				in_channel += 1
+
+	print("  contact au sol : %.3f m d'ecart moyen, %.2f m au pire (%d points)"
+		% [gap_total / float(maxi(points, 1)), worst_gap, points])
+	if compared > 0:
+		print("  hauteur au-dessus du fond : %.2f m en moyenne, %d point(s) restes dans le lit"
+			% [rise_total / float(compared), in_channel])
+
+	if detached > 0:
+		printerr("  %d point(s) de contour ne touchent pas la berge (plus de %.2f m)"
+			% [detached, OUTLINE_CONTACT])
+		failures += 1
+	if open_loops > 0:
+		printerr("  %d contour(s) ne se referment pas" % open_loops)
+		failures += 1
+	if compared > 0 and float(in_channel) / float(compared) > 0.15:
+		printerr("  le contour retombe dans le chenal au lieu de suivre la crete")
+		failures += 1
+	return failures + _check_river_fill(map, splines)
+
+
+# Le remplissage doit couvrir CE QUE LE CONTOUR DELIMITE, ni plus ni moins.
+#
+# Les deux sortent du meme champ, donc un ecart entre eux ne pourrait venir que
+# d'une divergence entre le trace du bord et le decoupage de l'interieur — le
+# genre de desaccord qui se voit en jeu comme un liseré vert debordant sur la
+# prairie, et qui ne se lit pas du tout dans le code.
+func _check_river_fill(map: WorldMap, splines: RiverSplines) -> int:
+	var meshes := splines.find_children("Surface", "MeshInstance3D", false, false)
+	if meshes.size() != 1:
+		printerr("  %d surface(s) de remplissage au lieu d'une" % meshes.size())
+		return 1
+	var mesh: ArrayMesh = (meshes[0] as MeshInstance3D).mesh
+	if mesh == null or mesh.get_surface_count() != 1:
+		printerr("  le remplissage ne sort pas une surface unique")
+		return 1
+
+	var vertices: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var outside := 0
+	var buried := 0
+	var worst_dip := 0.0
+	var depth_total := 0.0
+	for v in vertices:
+		# Le creusement est exactement ce que le biome RIVER couvre, berges
+		# comprises — sauf sous le niveau marin, rendu a la mer.
+		var inside := false
+		for cz in [floori(v.z), ceili(v.z)]:
+			for cx in [floori(v.x), ceili(v.x)]:
+				if map.is_river(cx, cz) \
+						or map.terrain_height(cx, cz) <= WorldMap.SEA_LEVEL:
+					inside = true
+		if not inside:
+			outside += 1
+
+		# C'est un PLAN D'EAU : il se tient au-dessus du lit, jamais dedans.
+		# Un remplissage qui epouserait le terrain donnerait une epaisseur nulle
+		# partout, et c'est exactement le defaut qu'on vient de corriger.
+		var ground := _ground_f(map, v.x, v.z)
+		depth_total += v.y - ground
+		if v.y < ground - FILL_TOLERANCE:
+			buried += 1
+			worst_dip = maxf(worst_dip, ground - v.y)
+
+	@warning_ignore("integer_division")
+	print("  remplissage : 1 surface, %d triangles · %.2f m d'eau en moyenne"
+		% [vertices.size() / 3, depth_total / float(maxi(vertices.size(), 1))])
+	if vertices.size() < 3:
+		printerr("  le remplissage est vide")
+		return 1
+	var failures := 0
+	if outside > 0:
+		printerr("  %d sommet(s) de remplissage hors du creusement" % outside)
+		failures += 1
+	if buried > 0:
+		printerr("  %d sommet(s) de remplissage sous le terrain, jusqu'a %.2f m"
+			% [buried, worst_dip])
+		failures += 1
+
+	# La REQUETE doit dire la meme chose que le MAILLAGE.
+	#
+	# Deux facons de connaitre l'altitude de l'eau cohabitent : les triangles
+	# qu'on voit, et `water_level_at` qui decide si un oeil est immerge. Rien
+	# n'oblige les deux a rester d'accord, et un desaccord ne se verrait pas —
+	# l'ecran montrerait de l'eau la ou le joueur respire, ou l'inverse.
+	var mismatched := 0
+	var silent := 0
+	for v in vertices:
+		# Les QUATRE colonnes qui encadrent le sommet, et non la plus proche.
+		#
+		# Un sommet de maillage tombe entre les colonnes ; son altitude est
+		# interpolee entre celles de ses voisines. Le confronter a une seule
+		# d'entre elles reprochait a la requete un ecart qui n'est que celui de
+		# l'interpolation — et au droit d'une cascade, ou la nappe descend d'un
+		# metre par colonne, cet ecart depasse n'importe quelle tolerance.
+		var low := INF
+		var high := -INF
+		var dry := false
+		for cz in [floori(v.z), ceili(v.z)]:
+			for cx in [floori(v.x), ceili(v.x)]:
+				var answered := splines.water_level_at(cx, cz)
+				if answered == -INF:
+					dry = true
+					continue
+				low = minf(low, answered)
+				high = maxf(high, answered)
+		# Un sommet de BORD est encadre par au moins une colonne seche, et son
+		# altitude est alors interpolee avec une valeur que la requete ne rend
+		# pas — les deux different par construction, pas par erreur. C'est
+		# l'interieur qui doit concorder.
+		if dry or low == INF:
+			silent += 1
+			continue
+		var height := v.y - RiverSplines.FILL_HOVER
+		if height < low - 0.25 or height > high + 0.25:
+			mismatched += 1
+	print("  requete d'immersion : %d sommet(s) de bord ecartes, %d en desaccord"
+		% [silent, mismatched])
+	# Si presque tout le maillage etait « de bord », c'est que la requete aurait
+	# cesse de repondre pour l'interieur, et le controle ne verifierait plus rien.
+	if float(silent) / float(vertices.size()) > 0.75:
+		printerr("  la requete d'immersion ne repond plus pour l'interieur de la nappe")
+		failures += 1
+	if mismatched > 0:
+		printerr("  la requete d'immersion ne dit pas la meme altitude que la nappe")
+		failures += 1
+	return failures
+
+
+func _control_points(paths: Array[Node]) -> int:
+	var total := 0
+	for node in paths:
+		var curve: Curve3D = (node as Path3D).curve
+		if curve != null:
+			total += curve.point_count
+	return total
+
+
+# Altitude du sol interpolee bilineairement, le terrain etant un champ continu.
+func _ground_f(map: WorldMap, x: float, z: float) -> float:
+	var x0 := floori(x)
+	var z0 := floori(z)
+	var tx := x - float(x0)
+	var tz := z - float(z0)
+	return lerpf(
+		lerpf(map.terrain_height_f(x0, z0), map.terrain_height_f(x0 + 1, z0), tx),
+		lerpf(map.terrain_height_f(x0, z0 + 1), map.terrain_height_f(x0 + 1, z0 + 1), tx),
+		tz)
+
+
+# Marge autour d'une bouche d'entree, en colonnes. Un peu plus large que
+# ENTRANCE_RADIUS : la galerie s'evase en debouchant.
+# Demi-cote du voisinage ou l'on cherche le fond du chenal, en colonnes. Un
+# chenal fait un a quatre metres de large et le contour longe sa berge : six
+# colonnes suffisent a atteindre le lit depuis la crete, sans aller chercher
+# celui de la riviere d'a cote.
+const BED_LOOKUP := 6
+
+# Enfoncement tolere pour un sommet de remplissage, en metres. La membrane
+# rejoint le terrain sur tout son bord : quelques centimetres d'ecart y sont le
+# pas de la grille, pas un defaut.
+const FILL_TOLERANCE := 0.10
+
+# Ecart au sol tolere pour un point de contour, en metres. La demande est qu'ils
+# TOUCHENT la berge : deux centimetres, soit la precision de la recherche de
+# crete, pas un degagement.
+const OUTLINE_CONTACT := 0.02
 
 # Marge autour d'une bouche d'entree, en colonnes. Un peu plus large que
 # ENTRANCE_RADIUS : la galerie s'evase en debouchant.
