@@ -243,6 +243,7 @@ func _trace_from(start: int, height_f: PackedFloat32Array,
 	var offsets := _neighbour_offsets(size_xz)
 	var first := point_count()
 	var previous_bed := INF
+	var previous_t := 0.0
 	var breaches := 0
 	var i := start
 
@@ -250,6 +251,16 @@ func _trace_from(start: int, height_f: PackedFloat32Array,
 		visited[i] = 1
 
 		var t := clampf((log(1.0 + flow[i]) - log_min) / log_span, 0.0, 1.0)
+		# UNE RIVIERE NE RETRECIT PAS VERS L'AVAL.
+		#
+		# Le debit, lui, le peut : un troncon PERCE (voir plus bas) traverse
+		# des colonnes qui ne font pas partie du reseau d'ecoulement, ou le
+		# debit vaut 1. Sans cette borne, un collecteur de quatre metres se
+		# pincait a un metre sur une dizaine de metres avant de se rouvrir —
+		# mesure sur le collecteur de la carte temoin, demi-largeur 1,84 puis
+		# 0,50 puis 1,31.
+		t = maxf(t, previous_t)
+		previous_t = t
 		# Racine carree et non rampe lineaire : le log du debit est deja tasse,
 		# et une rampe droite laisserait presque tout le reseau a la largeur
 		# minimale.

@@ -62,7 +62,7 @@ extends RefCounted
 # qu'on ait a y penser. Mais l'introspection ne voit pas le corps des
 # fonctions : sans ce compteur, une refonte de l'erosion servirait d'anciennes
 # cartes en silence.
-const GENERATION_VERSION := 3
+const GENERATION_VERSION := 4
 
 # --- Geometrie de l'ile ----------------------------------------------------
 const SEA_LEVEL := 30
