@@ -50,6 +50,7 @@ var _message := ""
 var _message_timer := 0.0
 var _sky: SkyCycle
 var _sea: Sea
+var _river_splines: RiverSplines
 
 
 func _ready() -> void:
@@ -116,6 +117,7 @@ func _ready() -> void:
 
 	_add_sky()
 	_add_sea()
+	_add_rivers()
 
 	status_label.text = "Carte calculee en %d ms — streaming en cours..." % map_ms
 	# Les entrees de grottes sont annoncees dans la console : sans leurs
@@ -138,6 +140,21 @@ func _add_sea() -> void:
 	# Centre de la carte : le terrain occupe [0, map_size] en X et en Z.
 	var center := Vector3(float(map_size) * 0.5, 0.0, float(map_size) * 0.5)
 	_sea.setup(center, float(WorldMap.SEA_LEVEL))
+
+
+# Les rivieres sont une surface a part, et non le plan de `_add_sea` : une
+# riviere descend de quarante metres d'altitude jusqu'au rivage, alors qu'un
+# ocean tient a une seule altitude.
+#
+# Le contour du creusement en tient lieu, et il a remplace une nappe calculee
+# separement : celle-ci se donnait son propre bord a partir d'un champ de
+# niveau, la ou le contour EST deja le bord exact du creusement. Voir
+# `river_splines.gd`.
+func _add_rivers() -> void:
+	_river_splines = RiverSplines.new()
+	_river_splines.name = "RiverSplines"
+	add_child(_river_splines)
+	_river_splines.setup(map)
 
 
 # Le ciel et le soleil sont pilotes par l'heure du jour. Le shader de ciel lit
@@ -379,7 +396,17 @@ func _update_immersion() -> void:
 	if _cave_lamp != null:
 		_cave_lamp.light_energy = _sky.underground * CAVE_LAMP_ENERGY
 
-	var submerged := eye.y < float(WorldMap.SEA_LEVEL) and column <= WorldMap.SEA_LEVEL
+	# Deux eaux, deux tests.
+	#
+	# La mer tient a une seule altitude, donc « sous la mer » se decide en
+	# comparant a `SEA_LEVEL`. Une riviere, elle, descend de quarante metres :
+	# il faut lui demander SON altitude a CETTE colonne — ce que la nappe sait
+	# repondre, et qui est la raison pour laquelle elle garde son champ de
+	# niveau apres avoir bati son maillage.
+	var at_sea := eye.y < float(WorldMap.SEA_LEVEL) and column <= WorldMap.SEA_LEVEL
+	var in_river := _river_splines != null \
+		and eye.y < _river_splines.water_level_at(floori(eye.x), floori(eye.z))
+	var submerged := at_sea or in_river
 	_sky.underwater = 1.0 if submerged else 0.0
 	_water_veil.visible = submerged
 

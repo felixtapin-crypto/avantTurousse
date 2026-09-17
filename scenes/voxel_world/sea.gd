@@ -27,7 +27,7 @@ func setup(center: Vector3, sea_level: float) -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(EXTENT, EXTENT)
 
-	_material = _build_material()
+	_material = build_material()
 
 	_mesh = MeshInstance3D.new()
 	_mesh.name = "Surface"
@@ -48,7 +48,13 @@ func setup(center: Vector3, sea_level: float) -> void:
 
 # Valeurs reprises de `tools/water_bench.gd` et de la direction artistique de
 # terrain-3d, ou elles ont ete reglees a la capture.
-func _build_material() -> ShaderMaterial:
+#
+# STATIQUE, parce que les rivieres s'en servent aussi (voir
+# `river_splines.gd`). Partager la matiere plutot que la recopier est ce qui
+# garantit qu'un reglage d'eau vaut pour toute l'eau du monde : une mer et une
+# riviere qui divergeraient au fil des retouches se verraient immediatement a
+# une embouchure, ou les deux se touchent.
+static func build_material() -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = load(SEA_SHADER)
 
@@ -70,7 +76,7 @@ func _build_material() -> ShaderMaterial:
 
 # Bruit de normales des vaguelettes : un reglage, pas une image, donc construit
 # en code plutot que versionne.
-func _ripple_normal() -> NoiseTexture2D:
+static func _ripple_normal() -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	noise.frequency = 0.03
