@@ -29,6 +29,9 @@ const SPRINT_MULTIPLIER := 2.0
 const FLY_SPEED := 32.0
 const JUMP_VELOCITY := 5.5
 
+# Vitesse a laquelle le corps pivote vers sa direction de marche, en rad/s.
+const TURN_SPEED := 10.0
+
 # Portee du pinceau AUTOUR DU PERSONNAGE, et non depuis l'objectif : en vue
 # d'epaule la camera recule jusqu'a huit metres, et compter depuis elle ferait
 # varier la portee avec le zoom.
@@ -82,25 +85,101 @@ var water_surface_y := -INF
 # le meme dos.
 var camera_rig_active := true
 
+# Le monde, qui porte l'outil de creusement ET l'appel reseau qui le partage.
+# Renseigne par `smooth_voxel_world._attach_player`.
+var world: Node3D
+
+@onready var sync: MultiplayerSynchronizer = $MultiplayerSynchronizer
+
 var _rig := PlayerCamera.new()
 # Provisoire : voir la section SILHOUETTE en bas de fichier.
 var _body_mesh: MeshInstance3D
 
+# Ce corps est-il CELUI QU'ON PILOTE, ou l'avatar de quelqu'un d'autre ?
+var _local := true
+
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 
+# ===========================================================================
+# UN CORPS PAR JOUEUR, UN SEUL PILOTE
+# ===========================================================================
+#
+# Le meme script sert au joueur local et aux avatars distants, et c'est
+# l'AUTORITE qui les separe. Le nom du noeud est l'identifiant du pair (pose
+# par `smooth_voxel_world._spawn_player`), donc chacun sait en entrant dans
+# l'arbre s'il se pilote ou s'il est pilote d'ailleurs.
+#
+# Un avatar distant ne lit pas les touches, ne calcule pas sa physique et
+# n'aiguille pas de camera : sa position et son cap lui arrivent par le
+# synchroniseur. Le laisser tourner sa propre physique le ferait tomber et
+# glisser en meme temps qu'il est repositionne — les deux se battraient.
 func _ready() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	# Requis par `ItemPickup` (cherche un porteur via ce groupe), et compatible
-	# avec la convention "players" deja utilisee par l'ancien prototype si un
-	# second joueur visible arrive un jour.
-	add_to_group("players")
+	set_multiplayer_authority(name.to_int())
+	_local = is_multiplayer_authority()
+
+	_configure_replication()
+	_build_body_mesh()
+
 	# La camera ignore la transformee du corps : c'est le rig qui la place, en
 	# coordonnees monde. Voir l'avertissement en tete de `player_camera.gd`.
 	camera.top_level = true
+	camera.current = _local
+
+	if not _local:
+		set_process(false)
+		set_physics_process(false)
+		set_process_unhandled_input(false)
+		return
+
+	# LA CAPTURE NE VAUT QUE POUR LE CORPS QU ON PILOTE. C est un reglage de la
+	# FENETRE et non du personnage : l avatar du compagnon la reclamerait aussi,
+	# et le dernier arrive gagnerait.
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+	# LE GROUPE NE PREND QUE LE CORPS QU ON PILOTE, pour la meme raison.
+	#
+	# `ItemPickup` ramasse dans l'inventaire du premier corps du groupe qui le
+	# touche. L'avatar du compagnon y passerait aussi : l'objet serait credite
+	# a un inventaire qui n'est qu'une copie locale, marque ramasse chez nous,
+	# et son proprietaire ne verrait jamais rien arriver.
+	add_to_group("players")
 	_rig.yaw = rotation.y
 	_rig.snap(self, camera)
-	_build_body_mesh()
+
+
+# CE QUI TRAVERSE LE FIL : la position et le cap, rien d'autre.
+#
+# Le cap ne sert qu'a voir de quel cote regarde le compagnon — le corps
+# s'oriente vers sa marche (voir `_face_movement`). La camera, elle, ne se
+# replique pas : chacun regarde ou il veut.
+#
+# La configuration est batie EN CODE et non dans la scene : elle doit etre
+# identique chez tous les pairs, et une ressource partagee par plusieurs
+# instances de joueur serait modifiee par la derniere qui la touche.
+func _configure_replication() -> void:
+	var config := SceneReplicationConfig.new()
+	for path in [NodePath(".:position"), NodePath(".:rotation")]:
+		config.add_property(path)
+		config.property_set_replication_mode(
+			path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
+	sync.replication_config = config
+	sync.set_multiplayer_authority(name.to_int())
+	# VISIBILITE DECLAREE PAIR PAR PAIR, et c'est indispensable.
+	#
+	# Un synchroniseur public s'annonce aux pairs CONNECTES au moment ou il
+	# entre dans l'arbre. Le corps de l'hote entre dans le sien avant que le
+	# client n'ait ouvert son monde : l'annonce arrive chez un pair qui n'a
+	# encore nulle part ou la ranger, elle est jetee, et les mises a jour qui
+	# suivent ne se rattachent plus a rien. Mesure a l'appui, le banc a montre
+	# le corps de l'hote fige a son point d'apparition chez le client pendant
+	# que le corps du client, lui, bougeait bien chez l'hote — la replication ne
+	# marchait que dans le sens ou l'ordre d'arrivee lui etait favorable.
+	#
+	# En visibilite declaree, c'est le monde qui l'ouvre a chaque pair quand il
+	# le sait PRESENT (voir `smooth_voxel_world._set_roster`), et l'annonce part
+	# a ce moment-la.
+	sync.public_visibility = false
 
 
 # Recolle la camera apres un deplacement impose (apparition, capture d'ecran).
@@ -235,6 +314,28 @@ func _physics_process(delta: float) -> void:
 		velocity.z = move_toward(velocity.z, 0.0, speed)
 
 	move_and_slide()
+	_face_movement(delta)
+
+
+# LE CORPS SE TOURNE VERS SA MARCHE.
+#
+# Invisible pour soi-meme — en vue d'epaule on regarde son dos, et il tourne
+# sous nos yeux sans qu'on ait a le suivre. Mais c'est ce que LE COMPAGNON
+# regarde : sans cela son avatar glisse en crabe, fige vers le meme cap, et
+# l'on ne sait jamais de quel cote il va. C'est aussi ce qui donne un sens a la
+# rotation repliquee.
+#
+# Le corps ne commande PLUS le deplacement depuis le passage en orbite libre
+# (le repere est le regard), donc le tourner ici ne peut rien deregler.
+func _face_movement(delta: float) -> void:
+	var flat := Vector2(velocity.x, velocity.z)
+	if flat.length_squared() < 0.25:
+		return
+	# Un corps regarde son -Z : le cap qui pointe le long de (x, z) est donc
+	# `atan2(-x, -z)`.
+	var wanted := atan2(-flat.x, -flat.y)
+	rotation.y = lerp_angle(
+		rotation.y, wanted, clampf(TURN_SPEED * delta, 0.0, 1.0))
 
 
 # Sculptage : on n'enleve pas un bloc, on retire ou ajoute de la matiere dans
@@ -297,72 +398,29 @@ func _edit(remove: bool) -> void:
 			edit_refused.emit("Trop pres de vous.")
 			return
 
-	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
-	voxel_tool.do_sphere(center, brush_radius)
+	# LE TERRAIN N'EST PAS MODIFIE ICI, IL EST DEMANDE AU MONDE.
+	#
+	# Creuser et deposer sont les seuls gestes qui changent l'ile, donc les
+	# seuls qui doivent traverser le fil : sans cela chacun creuserait dans sa
+	# copie et les deux iles divergeraient en silence, sans qu'aucun des deux
+	# joueurs ne puisse s'en apercevoir autrement qu'en tombant dans un trou que
+	# l'autre ne voit pas.
+	#
+	# LA PEINTURE DU DEPOT PART AVEC, et ce n'est pas un detail de rangement.
+	# L'hote renvoie des BLOCS ENTIERS, tous canaux confondus : s'il posait la
+	# sphere sans la peindre, sa version — en herbe par defaut — reviendrait
+	# ecraser la terre que le creuseur vient de peindre chez lui. Le depot
+	# redeviendrait vert chez tout le monde, et le correctif du commit 0754904
+	# serait defait par le reseau. Geometrie et matiere se decident donc au meme
+	# endroit : voir `smooth_voxel_world.request_terrain_edit`.
+	if world == null:
+		return
+	world.request_terrain_edit(center, brush_radius, remove)
+
 	if remove:
 		inventory.add(ItemCatalog.Id.DIRT, 1)
 	else:
 		inventory.remove(ItemCatalog.Id.DIRT, 1)
-
-	# UN DEPOT SORT DE TERRE, PAS D'HERBE.
-	#
-	# `do_sphere` en MODE_ADD ne touche que le canal SDF (la geometrie) : la
-	# matiere des voxels nouvellement solides reste a sa valeur par defaut, qui
-	# se trouve etre GRASS (index 0). On la force a DIRT juste apres le
-	# sculptage. Creuser n'a pas besoin de cette etape : la coupe expose la
-	# stratification deja posee par `TerrainGenerator` (terre puis roche en
-	# profondeur).
-	#
-	# MODE_TEXTURE_PAINT (le mode dedie, texture_index/texture_opacity) ne
-	# produisait aucun changement visible a l'essai — plutot que d'insister sur
-	# une API non documentee, `_paint_single_material` ecrit DIRECTEMENT les
-	# canaux INDICES/WEIGHTS avec le meme encodage que celui deja utilise, et
-	# deja verifie a l'ecran, par `TerrainGenerator._single_material`.
-	if not remove:
-		_paint_single_material(center, brush_radius, TerrainGenerator.Layer.DIRT)
-		_regrow_grass(center, brush_radius)
-
-
-# Repousse de l'herbe sur un depot laisse a l'air libre, avec le temps.
-#
-# Duree a calibrer en playtest (voir `FarmPlot.GROWTH_DURATION` pour le meme
-# genre de reglage sur l'ancien prototype). Repeindre en herbe un depot qui
-# a ete recreuse entretemps ne fait rien de visible : sans matiere solide la,
-# la peinture ne colore aucune surface.
-const GRASS_REGROWTH_SECONDS := 60.0
-
-
-func _regrow_grass(center: Vector3, radius: float) -> void:
-	await get_tree().create_timer(GRASS_REGROWTH_SECONDS).timeout
-	if voxel_tool == null:
-		return
-	_paint_single_material(center, radius, TerrainGenerator.Layer.GRASS)
-
-
-# Peint une sphere d'une SEULE matiere, avec le meme encodage que
-# `TerrainGenerator._single_material` : quatre index CONSECUTIFS a partir de
-# 0 (l'ordre depend seulement de `layer`, jamais de ce qu'il y avait avant),
-# et tout le poids sur celui qui correspond a `layer`. Ne marche que pour
-# `layer` < 4 (vrai pour GRASS et DIRT, les deux seuls cas d'usage ici) — au
-# dela l'ordre des quatre index consecutifs changerait la position du poids.
-func _paint_single_material(center: Vector3, radius: float, layer: int) -> void:
-	var indices := VoxelTool.vec4i_to_u16_indices(Vector4i(0, 1, 2, 3))
-	var weights := [0.0, 0.0, 0.0, 0.0]
-	weights[layer] = 1.0
-	var packed_weights := VoxelTool.color_to_u16_weights(
-		Color(weights[0], weights[1], weights[2], weights[3]))
-
-	voxel_tool.channel = VoxelBuffer.CHANNEL_INDICES
-	voxel_tool.mode = VoxelTool.MODE_SET
-	voxel_tool.value = indices
-	voxel_tool.do_sphere(center, radius)
-
-	voxel_tool.channel = VoxelBuffer.CHANNEL_WEIGHTS
-	voxel_tool.value = packed_weights
-	voxel_tool.do_sphere(center, radius)
-
-	# Le reste de `_edit` (et le raycast) suppose le canal SDF actif.
-	voxel_tool.channel = VoxelBuffer.CHANNEL_SDF
 
 
 # ===========================================================================

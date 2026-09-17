@@ -12,8 +12,19 @@ extends Node3D
 # - la bedrock ne peut plus etre protegee bloc par bloc, il faudra borner la
 #   distance signee dans le generateur.
 
-@onready var player: CharacterBody3D = $Player
+const PLAYER_SCENE := preload("res://scenes/voxel_world/voxel_player.tscn")
+
+@onready var players_root: Node3D = $Players
 @onready var status_label: Label = $Hud/StatusLabel
+
+# Le corps qu'ON PILOTE. Les autres sont des avatars, sans camera ni physique.
+# Chez un client il n'existe pas encore au `_ready` du monde : il arrive avec la
+# liste que renvoie le serveur. Voir `_setup_players` et `_attach_player`.
+var _local_player: CharacterBody3D
+
+# Qui est PRESENT dans le monde. Tenue par le serveur seul ; les clients ne font
+# qu'appliquer la liste qu'il leur envoie. Voir `_setup_players`.
+var _present := {}
 
 var _exit_bar: Control
 var _exit_fill: ColorRect
@@ -47,6 +58,9 @@ var _cave_lamp: OmniLight3D
 @export var view_distance: int = 256
 
 const MESSAGE_DURATION := 2.5
+
+# Ecart entre deux points d apparition, en metres.
+const SPAWN_SPACING := 3
 
 var map: WorldMap
 var terrain: VoxelTerrain
@@ -117,28 +131,8 @@ func _ready() -> void:
 	# En lisse, l'outil travaille sur la distance signee, pas sur un type.
 	_tool.channel = VoxelBuffer.CHANNEL_SDF
 
-	_viewer = VoxelViewer.new()
-	_viewer.name = "VoxelViewer"
-	_viewer.view_distance = view_distance
-	_viewer.requires_visuals = true
-	_viewer.requires_collisions = true
-	player.add_child(_viewer)
-
-	player.voxel_tool = _tool
-	player.edit_refused.connect(_on_edit_refused)
-	player.inventory_toggle_requested.connect(_toggle_inventory)
-	player.flying = true
-	player.position = _spawn_position()
-	# La camera est en `top_level` : elle ne suit pas un saut de position, il
-	# faut la recoller apres l'apparition. Voir `PlayerCamera.snap`.
-	player.snap_camera()
-
-	# C est l OEIL qui passe sous la surface, et il le fait avant les pieds.
-	var cameras := player.find_children("*", "Camera3D", true, false)
-	if not cameras.is_empty():
-		_camera = cameras[0] as Camera3D
-
-	_build_cave_lamp()
+	_build_terrain_sync()
+	_setup_players()
 
 	_add_sky()
 	_add_sea()
@@ -160,6 +154,209 @@ func _ready() -> void:
 	print("%d salles, %d entrees de grotte :" % [map.cave_rooms().size(), entrances.size()])
 	for entrance in entrances:
 		print("  entree en x=%d y=%d z=%d" % [entrance.x, entrance.y, entrance.z])
+
+
+# ===========================================================================
+# LES JOUEURS
+# ===========================================================================
+#
+# UN CORPS PAR JOUEUR PRESENT DANS LE MONDE. Le nom du noeud est l'identifiant
+# du pair, donc chacun sait en arrivant lequel il pilote (voir
+# `voxel_debug_player.gd`), et le chemin `Players/<id>` est le meme partout —
+# ce dont le synchroniseur de chaque corps a besoin pour retrouver son jumeau.
+#
+# PRESENT N'EST PAS CONNECTE, et c'est toute la difficulte.
+#
+# Un client se connecte pendant que l'hote est encore dans son menu des mondes :
+# a cet instant, aucune scene de jeu n'existe ni chez l'un ni chez l'autre. Un
+# `MultiplayerSpawner` y perd son latin — il diffuse ses apparitions aux pairs
+# CONNECTES, donc a un client qui n'a pas encore de monde ou les poser, et le
+# message tombe dans le vide. Le client entrerait dans une ile vide, sans meme
+# son propre corps.
+#
+# Le serveur tient donc la liste de ceux qui sont VRAIMENT ENTRES : chacun le
+# lui annonce en arrivant, et la liste complete est renvoyee a tout le monde.
+# Chaque pair cree ce qui manque et retire ce qui est parti. Un arrivant tardif
+# recoit la liste entiere, donc les corps de ceux qui l'ont precede.
+#
+# En solo, la liste tient en un nom et ne voyage pas.
+func _setup_players() -> void:
+	if not Network.is_online():
+		_set_roster([1])
+		return
+	if multiplayer.is_server():
+		_present[1] = true
+		_publish_roster()
+		return
+	_entered_world.rpc_id(1)
+
+
+@rpc("any_peer", "reliable")
+func _entered_world() -> void:
+	if not multiplayer.is_server():
+		return
+	_present[multiplayer.get_remote_sender_id()] = true
+	_publish_roster()
+
+
+func _publish_roster() -> void:
+	# TRIEE, parce que le rang dans la liste decide du point d'apparition : deux
+	# pairs qui l'ordonnent differemment poseraient le meme joueur a deux
+	# endroits.
+	# Diffusee A CHAQUE PRESENT plutot qu a la cantonade, pour la meme raison
+	# que l horloge : un pair connecte sans monde ne peut pas la recevoir.
+	var ids: Array = _present.keys()
+	ids.sort()
+	for id in ids:
+		if int(id) != 1:
+			_set_roster.rpc_id(int(id), ids)
+	_set_roster(ids)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _set_roster(ids: Array) -> void:
+	for rank in ids.size():
+		var id := int(ids[rank])
+		if not players_root.has_node(str(id)):
+			_add_player(id, rank)
+	for body in players_root.get_children():
+		if not ids.has(body.name.to_int()):
+			body.queue_free()
+	_show_local_body_to(ids)
+
+
+# OUVRE NOTRE CORPS AUX AUTRES, un par un.
+#
+# Le synchroniseur de chaque corps est en visibilite declaree (voir
+# `voxel_debug_player._configure_replication`) : sans cet appel, personne ne
+# verrait jamais personne bouger. On ne l'ouvre qu'a des pairs qu'on sait
+# PRESENTS, ce qui est tout l'interet — l'annonce part quand le destinataire a
+# de quoi la recevoir, et non quand il se trouve simplement connecte.
+func _show_local_body_to(ids: Array) -> void:
+	if _local_player == null or not Network.is_online():
+		return
+	var me := multiplayer.get_unique_id()
+	for id in ids:
+		if int(id) != me:
+			_local_player.sync.set_visibility_for(int(id), true)
+
+
+func _add_player(id: int, rank: int) -> void:
+	var body := PLAYER_SCENE.instantiate()
+	body.name = str(id)
+	# Decales les uns des autres, faute de quoi deux joueurs apparaissent dans
+	# la meme capsule et se repoussent violemment a la premiere image.
+	body.position = _spawn_position(rank)
+	# `add_child` appelle `_ready` tout de suite : le corps sait donc deja s'il
+	# est le notre quand on l'equipe.
+	players_root.add_child(body)
+	_attach_player(body)
+
+
+# Ce que le monde donne a un corps : l'outil de creusement et lui-meme, pour
+# tous ; la camera, le spectateur de streaming et la lampe, pour le seul qu'on
+# pilote.
+func _attach_player(body: CharacterBody3D) -> void:
+	if body == null:
+		return
+	body.world = self
+	body.voxel_tool = _tool
+	if not body.is_multiplayer_authority():
+		if multiplayer.is_server():
+			_attach_remote_viewer(body)
+		return
+
+	_local_player = body
+	body.edit_refused.connect(_on_edit_refused)
+	# L inventaire est celui du corps QU ON PILOTE : la barre rapide et l ecran
+	# d inventaire ne montrent que le sien, et l avatar du compagnon n a pas a
+	# ouvrir d interface chez nous.
+	body.inventory_toggle_requested.connect(_toggle_inventory)
+	body.flying = true
+	# La camera est en `top_level` : elle ne suit pas un saut de position, il
+	# faut la recoller apres l'apparition. Voir `PlayerCamera.snap`.
+	body.snap_camera()
+	# C est l OEIL qui passe sous la surface, et il le fait avant les pieds.
+	_camera = body.camera
+
+	# LE SPECTATEUR SUIT LE CORPS QU'ON PILOTE, et lui seul : c'est ce qui
+	# decide des blocs a charger. En poser un sur chaque avatar ferait generer
+	# le terrain autour du compagnon aussi, pour personne qui le regarde.
+	_viewer = VoxelViewer.new()
+	_viewer.name = "VoxelViewer"
+	_viewer.view_distance = view_distance
+	_viewer.requires_visuals = true
+	_viewer.requires_collisions = true
+	body.add_child(_viewer)
+
+	_build_cave_lamp(body)
+
+
+# ===========================================================================
+# LE TERRAIN CREUSE VOYAGE PAR BLOCS
+# ===========================================================================
+#
+# L'appel de creusement, a lui seul, ne suffit pas : il ne touche que les pairs
+# qui ont DEJA la zone en memoire. Un compagnon parti a l'autre bout de l'ile ne
+# le recevra pas, et retrouvera le terrain intact en revenant — deux iles qui
+# divergent sans que personne ne puisse s'en apercevoir.
+#
+# `VoxelTerrainMultiplayerSynchronizer` repond exactement a ce cas. Il n'a ni
+# reglage ni signal — deux points d'entree RPC, et rien d'autre : tout se decide
+# par l'ARBRE et par les VIEWERS.
+#
+# - il se decouvre lui-meme en etant ENFANT DU TERRAIN ;
+# - il doit porter le MEME NOM chez tous les pairs, sinon l'appel distant ne
+#   trouve pas son destinataire ;
+# - cote serveur, il apprend ou est chacun par des `VoxelViewer` marques d'un
+#   identifiant de pair (voir `_attach_remote_viewer`), et c'est la notification
+#   d'entree dans un bloc qui declenche l'envoi — d'ou
+#   `set_block_enter_notification_enabled`.
+#
+# Il est annonce « very experimental » par godot_voxel, et documente pour
+# `VoxelTerrain` seulement — ce qui est notre cas.
+const TERRAIN_SYNC_NAME := "MultiplayerSync"
+
+
+func _build_terrain_sync() -> void:
+	if not Network.is_online():
+		return
+	var sync := VoxelTerrainMultiplayerSynchronizer.new()
+	sync.name = TERRAIN_SYNC_NAME
+	terrain.add_child(sync)
+	if multiplayer.is_server():
+		terrain.set_block_enter_notification_enabled(true)
+
+
+# Distance a laquelle le SERVEUR tient le terrain autour d'un joueur distant.
+#
+# Plus courte que la distance de vue : il n'a pas a VOIR ce que regarde son
+# compagnon, seulement a detenir ce qu'il pourrait creuser et ce qu'il faudra
+# lui renvoyer. Elle doit rester tres au-dessus de la portee du pinceau (huit
+# metres), faute de quoi le serveur refuserait d'arbitrer un creusement fait
+# loin de lui.
+const REMOTE_VIEW_DISTANCE := 128
+
+
+# LE SERVEUR TIENT LE TERRAIN AUTOUR DE CHAQUE JOUEUR, pas seulement du sien.
+#
+# Sans ce spectateur-la, le serveur ne sait rien de la region ou se trouve son
+# compagnon : il ne peut ni arbitrer un creusement qu'on y fait, ni lui renvoyer
+# les blocs modifies quand il y revient. C'est lui qui porte l'identifiant de
+# pair, seul lien entre une position dans le monde et quelqu'un au bout du fil.
+#
+# SANS VISUEL NI COLLISION : le serveur n'a pas besoin de mailler ni de marcher
+# sur ce terrain-la, seulement de le detenir. C'est ce qui rend la depense
+# supportable — elle reste reelle, notre generateur etant en GDScript.
+func _attach_remote_viewer(body: CharacterBody3D) -> void:
+	var viewer := VoxelViewer.new()
+	viewer.name = "VoxelViewer"
+	viewer.view_distance = REMOTE_VIEW_DISTANCE
+	viewer.requires_visuals = false
+	viewer.requires_collisions = false
+	viewer.requires_data_block_notifications = true
+	viewer.set_network_peer_id(body.name.to_int())
+	body.add_child(viewer)
 
 
 # En lisse, l'eau ne peut pas etre un voxel : la surface d'isovaleur est
@@ -312,7 +509,7 @@ func _toggle_inventory() -> void:
 		_inventory_screen.close()
 	else:
 		_crosshair.visible = false
-		_inventory_screen.open(player.inventory)
+		_inventory_screen.open(_local_player.inventory)
 
 
 func _build_pause_menu() -> void:
@@ -420,16 +617,17 @@ func _quit_to_desktop() -> void:
 # monde fige, sans un mot, jusqu'a ce qu'il tue la fenetre lui-meme. Rien non
 # plus ne disait qu'un compagnon venait d'arriver.
 #
-# Ce que ces branchements NE FONT PAS : synchroniser la partie. Les positions et
-# le creusement ne traversent toujours pas le fil (voir issue #31). Seule la
-# graine voyage, ce qui suffit a ce que les deux joueurs soient dans la meme
-# ile — mais chacun y est encore seul.
+# CE QUI TRAVERSE LE FIL, desormais : la graine, les corps, le creusement et
+# l'heure. Voir `_setup_players`, `request_terrain_edit` et `_share_clock`.
 func _watch_network() -> void:
 	Network.player_connected.connect(_on_player_connected)
 	Network.player_disconnected.connect(_on_player_disconnected)
 	Network.server_disconnected.connect(_on_server_disconnected)
 
 
+# Connecte, mais pas encore entre dans le monde : son corps n'apparait qu'a son
+# annonce, quelques secondes plus tard, le temps qu'il calcule l'ile. Voir
+# `_setup_players`.
 func _on_player_connected(id: int, player_name: String) -> void:
 	# Le pair recoit aussi sa propre arrivee ; se l'annoncer n'aurait pas de
 	# sens.
@@ -438,8 +636,196 @@ func _on_player_connected(id: int, player_name: String) -> void:
 	_notify("%s a rejoint la partie." % player_name)
 
 
-func _on_player_disconnected(_id: int) -> void:
+func _on_player_disconnected(id: int) -> void:
 	_notify("Un joueur a quitte la partie.")
+	# Le corps part avec son joueur, et c'est la LISTE qui le dit : le serveur la
+	# republie sans lui, chaque pair retire ce qui n'y est plus.
+	if not multiplayer.is_server():
+		return
+	_present.erase(id)
+	_publish_roster()
+
+
+# ===========================================================================
+# LE CREUSEMENT TRAVERSE LE FIL
+# ===========================================================================
+#
+# C'est le SEUL geste qui change l'ile, donc le seul qui doive etre partage.
+# Tout le reste — relief, biomes, grottes, rivieres — se rederive de la graine
+# et est deja identique au voxel pres chez les deux joueurs.
+#
+# LE GESTE MONTE A L'HOTE, LE RESULTAT REDESCEND EN BLOCS.
+#
+# Deux chemins, et ils ne transportent pas la meme chose. Le geste — un centre,
+# un rayon, creuser ou ajouter — tient en quelques octets et ne part que vers
+# l'hote. Ce que l'hote en fait redescend ensuite sous forme de VOXELS, par le
+# synchroniseur de terrain (voir `_build_terrain_sync`), qui sait a la fois
+# pousser la zone modifiee a ceux qui la regardent et rendre le bloc entier a
+# celui qui y revient plus tard.
+#
+# L'HOTE ARBITRE, donc, et c'est ce qui permettra d'y poser une REGLE — la
+# bedrock increusable, par exemple (issue #34) — sans qu'un pair puisse la
+# contourner en s'adressant directement aux autres.
+#
+# Le demandeur applique TOUT DE SUITE, sans attendre la reponse. Le sculptage
+# est deterministe et idempotent (la distance signee prend un min ou un max),
+# donc la version de l'hote qui arrive ensuite repose exactement la meme chose.
+# Sans cette avance, creuser accuserait l'aller-retour reseau a chaque coup de
+# pinceau.
+func request_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
+	if Network.is_online() and not multiplayer.is_server():
+		_apply_terrain_edit(center, radius, remove)
+		_ask_terrain_edit.rpc_id(1, center, radius, remove)
+		return
+	_publish_terrain_edit(center, radius, remove)
+
+
+# Cote hote : applique, et c'est tout.
+#
+# LA REDISTRIBUTION N'EST PLUS FAITE ICI. Elle l'a ete, par un appel diffuse a
+# tous les pairs, et ca marchait — pour ceux qui avaient deja la zone en
+# memoire. Le synchroniseur de terrain, lui, couvre les deux cas d'un seul
+# mecanisme : il pousse la zone modifiee aux pairs qui la regardent, et envoie
+# le bloc entier a celui qui y revient plus tard. Garder les deux aurait laisse
+# deux chemins pour une seule chose, dont un qui ne couvrait qu'a moitie.
+func _publish_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
+	_apply_terrain_edit(center, radius, remove)
+
+
+# Demande d'un client. NE VA QUE VERS L'HOTE — la garde ferme la porte a un
+# pair qui s'adresserait a un autre client pour contourner l'arbitrage.
+@rpc("any_peer", "reliable")
+func _ask_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	_publish_terrain_edit(center, radius, remove)
+
+
+func _apply_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
+	if _tool == null:
+		return
+	# La zone peut n'etre pas chargee chez ce pair-la : on ne sculpte pas dans
+	# un bloc qui n'existe pas encore, il serait ecrase a son arrivee.
+	var box := AABB(center - Vector3.ONE * radius, Vector3.ONE * radius * 2.0)
+	if not _tool.is_area_editable(box):
+		return
+	_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
+	_tool.do_sphere(center, radius)
+	if not remove:
+		_paint_single_material(center, radius, TerrainGenerator.Layer.DIRT)
+		_regrow_grass(center, radius)
+
+
+# UN DEPOT SORT DE TERRE, PAS D'HERBE.
+#
+# `do_sphere` en MODE_ADD ne touche que le canal SDF (la geometrie) : la matiere
+# des voxels nouvellement solides reste a sa valeur par defaut, qui se trouve
+# etre GRASS (index 0). On la force a DIRT juste apres le sculptage. Creuser n'a
+# pas besoin de cette etape : la coupe expose la stratification deja posee par
+# `TerrainGenerator` (terre puis roche en profondeur).
+#
+# MODE_TEXTURE_PAINT (le mode dedie, texture_index/texture_opacity) ne produisait
+# aucun changement visible a l'essai — plutot que d'insister sur une API non
+# documentee, `_paint_single_material` ecrit DIRECTEMENT les canaux
+# INDICES/WEIGHTS avec le meme encodage que celui deja utilise, et deja verifie a
+# l'ecran, par `TerrainGenerator._single_material`.
+#
+# CETTE PEINTURE VIT DANS LE MONDE ET NON DANS LE JOUEUR, depuis que le terrain
+# se partage : elle doit s'appliquer partout ou la sphere s'applique, c'est-a-dire
+# chez l'hote, qui est celui dont les blocs font foi.
+
+# Repousse de l'herbe sur un depot laisse a l'air libre, avec le temps.
+#
+# Duree a calibrer en playtest (voir `FarmPlot.GROWTH_DURATION` pour le meme
+# genre de reglage sur l'ancien prototype). Repeindre en herbe un depot qui a ete
+# recreuse entretemps ne fait rien de visible : sans matiere solide la, la
+# peinture ne colore aucune surface.
+const GRASS_REGROWTH_SECONDS := 60.0
+
+
+func _regrow_grass(center: Vector3, radius: float) -> void:
+	await get_tree().create_timer(GRASS_REGROWTH_SECONDS).timeout
+	if _tool == null:
+		return
+	_paint_single_material(center, radius, TerrainGenerator.Layer.GRASS)
+
+
+# Peint une sphere d'une SEULE matiere, avec le meme encodage que
+# `TerrainGenerator._single_material` : quatre index CONSECUTIFS a partir de 0
+# (l'ordre depend seulement de `layer`, jamais de ce qu'il y avait avant), et
+# tout le poids sur celui qui correspond a `layer`. Ne marche que pour
+# `layer` < 4 (vrai pour GRASS et DIRT, les deux seuls cas d'usage ici) — au dela
+# l'ordre des quatre index consecutifs changerait la position du poids.
+func _paint_single_material(center: Vector3, radius: float, layer: int) -> void:
+	var indices := VoxelTool.vec4i_to_u16_indices(Vector4i(0, 1, 2, 3))
+	var weights := [0.0, 0.0, 0.0, 0.0]
+	weights[layer] = 1.0
+	var packed_weights := VoxelTool.color_to_u16_weights(
+		Color(weights[0], weights[1], weights[2], weights[3]))
+
+	_tool.channel = VoxelBuffer.CHANNEL_INDICES
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = indices
+	_tool.do_sphere(center, radius)
+
+	_tool.channel = VoxelBuffer.CHANNEL_WEIGHTS
+	_tool.value = packed_weights
+	_tool.do_sphere(center, radius)
+
+	# Le reste du monde (et le raycast du joueur) suppose le canal SDF actif.
+	_tool.channel = VoxelBuffer.CHANNEL_SDF
+
+
+# ===========================================================================
+# L'HEURE EST CELLE DE L'HOTE
+# ===========================================================================
+#
+# Les deux machines avancent leur cycle a leur propre cadence d'images. Rien
+# ne les recale, donc elles derivent : au bout d'une heure de jeu, l'un peut
+# etre au couchant quand l'autre a encore le soleil au zenith — et le ciel, la
+# lumiere et les ombres en dependent tous.
+#
+# L'hote envoie donc SON heure a intervalle regulier, et les clients s'y posent.
+# Le saut est franc plutot que lisse : entre deux envois l'ecart accumule vaut
+# au plus quelques milliemes de journee, ce qui ne se voit pas ; et un client
+# qui arrive en cours de partie DOIT sauter, son ciel pouvant etre a des heures
+# de celui de l'hote.
+#
+# La duree du jour voyage avec, parce qu'elle se choisit a la composition de la
+# carte et qu'un client entre sans etre passe par cet ecran.
+#
+# PAS DE METEO A ARBITRER POUR L'INSTANT : le monde voxel n'en a pas. Le jour
+# ou il en aura une, c'est ici qu'elle passera — meme envoi, meme cadence.
+const CLOCK_PERIOD := 2.0
+
+var _clock_timer := 0.0
+
+
+func _share_clock(delta: float) -> void:
+	if _sky == null or not Network.is_hosting():
+		return
+	_clock_timer -= delta
+	if _clock_timer > 0.0:
+		return
+	_clock_timer = CLOCK_PERIOD
+	# ENVOYEE AUX SEULS PAIRS PRESENTS, un par un, et non diffusee a tous.
+	#
+	# Un client connecte mais pas encore entre n'a pas de scene de jeu ou poser
+	# l'appel : Godot ne trouve pas le noeud destinataire et remonte une erreur.
+	# Toutes les deux secondes, pendant les dix a vingt secondes que dure le
+	# calcul de son ile.
+	for id in _present:
+		if int(id) != 1:
+			_receive_clock.rpc_id(
+				int(id), _sky.time_of_day, _sky.day_length_seconds)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _receive_clock(time_of_day: float, day_length: float) -> void:
+	if _sky == null:
+		return
+	_sky.time_of_day = time_of_day
+	_sky.day_length_seconds = day_length
 
 
 # L'hote est parti : il n'y a plus de partie a jouer.
@@ -573,24 +959,32 @@ func _process(delta: float) -> void:
 	if map == null:
 		return
 
-	if _sky != null:
+	_share_clock(delta)
+
+	if _sky != null and _local_player != null:
 		_update_immersion()
 
 	if _message_timer > 0.0:
 		_message_timer -= delta
 		status_label.text = _message
 		return
-	var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
+	# Le corps peut n'etre pas encore arrive : chez un client, il vient du
+	# serveur, donc quelques images apres l'ouverture de la scene.
+	if _local_player == null:
+		status_label.text = "Entree dans le monde..."
+		return
+	var here := _local_player.position
+	var cell := Vector3i(floori(here.x), 0, floori(here.z))
 	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d%s" % [
 		world_seed,
 		_sky.clock(),
 		Engine.get_frames_per_second(),
-		"vol" if player.flying else "marche",
+		"vol" if _local_player.flying else "marche",
 		map.biome_name(map.biome_at(cell.x, cell.z)),
-		int(player.position.y),
+		int(here.y),
 		_company(),
 	]
-	_hotbar.refresh(player.inventory)
+	_hotbar.refresh(_local_player.inventory)
 
 
 # Qui est la. RIEN NE LE DISAIT NULLE PART : on hebergeait une partie sans
@@ -607,16 +1001,22 @@ func _company() -> String:
 	return " · %d joueurs" % Network.players.size()
 
 
-func _spawn_position() -> Vector3:
+# Premiere terre emergee en spirale depuis le centre de l'ile.
+#
+# `rank` ecarte les joueurs les uns des autres : ils apparaissent ensemble, donc
+# assez pres pour se voir et se rejoindre, mais pas dans la meme capsule — deux
+# corps confondus se repoussent violemment a la premiere image de physique.
+func _spawn_position(rank: int = 0) -> Vector3:
 	var center := int(float(map_size) / 2.0)
+	var shift := rank * SPAWN_SPACING
 	for radius in range(0, map_size / 2, 2):
 		for step in 16:
 			var angle := TAU * float(step) / 16.0
-			var x := center + int(round(cos(angle) * float(radius)))
+			var x := center + shift + int(round(cos(angle) * float(radius)))
 			var z := center + int(round(sin(angle) * float(radius)))
 			if map.terrain_height(x, z) > WorldMap.SEA_LEVEL:
 				return Vector3(float(x) + 0.5, float(map.terrain_height(x, z)) + 3.0, float(z) + 0.5)
-	return Vector3(float(center), float(map_height), float(center))
+	return Vector3(float(center + shift), float(map_height), float(center))
 
 
 # Nombre de cailloux disperses autour du spawn : modeste plutot que
@@ -686,7 +1086,7 @@ func _spawn_pickup_near_spawn(rng: RandomNumberGenerator, item_id: int, radius: 
 # La position prise est celle de la CAMERA et non du corps : c'est l'oeil qui
 # passe sous la surface, et il le fait une seconde avant les pieds.
 func _update_immersion() -> void:
-	var eye := _camera.global_position if _camera != null else player.global_position
+	var eye := _camera.global_position if _camera != null else _local_player.global_position
 	var column := map.terrain_height(floori(eye.x), floori(eye.z))
 
 	# Voir la note en tete de SkyCycle : l'ambiante et la perspective aerienne
@@ -711,9 +1111,9 @@ func _update_immersion() -> void:
 	#
 	# C'est ce qui permet au test ci-dessus de rester branche sur la seule
 	# camera, sans une ligne de plus.
-	var shoulder := player.global_position + Vector3.UP * PlayerCamera.PIVOT_Y
+	var shoulder := _local_player.global_position + Vector3.UP * PlayerCamera.PIVOT_Y
 	var surface := _water_surface_at(shoulder)
-	player.water_surface_y = -INF if shoulder.y < surface else surface
+	_local_player.water_surface_y = -INF if shoulder.y < surface else surface
 
 
 # Altitude de la surface d'eau au-dessus de ce point, ou -INF s'il n'y en a
@@ -786,7 +1186,7 @@ const CAVE_LAMP_ENERGY := 3.4
 const CAVE_LAMP_COLOR := Color(1.0, 0.87, 0.68)
 
 
-func _build_cave_lamp() -> void:
+func _build_cave_lamp(body: CharacterBody3D) -> void:
 	_cave_lamp = OmniLight3D.new()
 	_cave_lamp.name = "LampeProvisoire"
 	_cave_lamp.omni_range = CAVE_LAMP_RANGE
@@ -797,4 +1197,4 @@ func _build_cave_lamp() -> void:
 	# Un peu au-dessus des pieds, pour eclairer le sol devant plutot que de
 	# poser le joueur au centre d'une bulle.
 	_cave_lamp.position = Vector3(0.0, 1.2, 0.0)
-	player.add_child(_cave_lamp)
+	body.add_child(_cave_lamp)
