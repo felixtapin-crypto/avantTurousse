@@ -29,10 +29,13 @@ l'autre a retravaillé le même système en parallèle.
 
 ## Workflow git : branches + Pull Request
 
-`master` est maintenant protégée sur GitHub : impossible d'y pousser
-directement, il faut passer par une Pull Request avec **au moins une
-approbation** (donc que l'autre l'ait relue et validée) avant de pouvoir
-merger. Concrètement :
+L'approbation obligatoire de PR sur `master` a été retirée côté GitHub (l'API
+classique de protection de branche lie ça à la protection "push direct
+interdit" — retirer l'une retire l'autre). Un push direct sur `master` est
+donc techniquement possible, mais **la règle reste la même entre nous** :
+passer par une branche + PR, et ne merger que quand on est d'accord tous les
+deux dessus. C'est une discipline volontaire, plus une contrainte imposée par
+GitHub. Concrètement :
 
 1. Crée une branche pour la tâche (`git checkout -b <nom>` depuis
    `master` à jour). Nom libre mais parlant, par ex. `voxel-interaction`
@@ -173,3 +176,19 @@ messages de commit.
 - 2026-09-16 — Migration du suivi de tâches de ce fichier vers un GitHub
   Project (voir le lien en haut). Les 17 tâches de la section "À faire"
   sont devenues des issues sur le board.
+- 2026-09-17 — **Changement de fondation technique** : PR #44 de Guillaume
+  (`scenes/voxel_world/`, vraie grille de voxels via `godot_voxel`) fusionnée
+  dans `master` avec l'accord de Felix. Le menu (`scenes/main_menu/`) route
+  maintenant vers `scenes/voxel_world/smooth_voxel_world.tscn` au lieu de
+  `scenes/world/world.tscn` : le prototype heightmap et tout le contenu
+  construit dessus (survie, jardinage, artefacts, sélecteur d'outil) devient
+  inatteignable en jeu, sans être supprimé du dépôt (voir `DESIGN.md`,
+  section "Ce qui change par rapport au prototype existant", pour le détail
+  et la suite prévue). Binaires Windows de l'extension `godot_voxel`
+  installés localement (non versionnés, voir README). Projet ouvert
+  maintenant avec Godot 4.7.2 (mono) au lieu de 4.6.3, pour matcher la
+  version déclarée par la branche de Guillaume. Aucune issue fermée par ce
+  merge (rien n'est encore "terminé" côté contenu sur cette nouvelle base) ;
+  les anciennes issues liées au prototype heightmap (#1, #3, etc.) sont à
+  retrier une fois qu'on aura décidé ce qui se porte tel quel, se réécrit, ou
+  se laisse tomber.

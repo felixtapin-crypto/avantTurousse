@@ -6,6 +6,18 @@ modifie-le, mais **préviens l'autre avant de changer un pilier majeur** (voir
 `TASKS.md` pour la coordination). Un désaccord non discuté qui atterrit
 silencieusement dans un commit est la source n°1 de conflits d'équipe à deux.
 
+> **2026-09-17 — Changement de fondation technique.** La PR #44 de Guillaume
+> (`scenes/voxel_world/`, vraie grille de voxels 3D via `godot_voxel`) a été
+> adoptée comme nouvelle base du jeu, en remplacement du prototype heightmap
+> (`scenes/world/` + `scenes/player/`) construit précédemment. Le menu
+> (`scenes/main_menu/`) route désormais vers `scenes/voxel_world/`. Les
+> fichiers `scenes/world/` et `scenes/player/` restent dans le dépôt (rien
+> n'est supprimé) mais ne sont plus atteignables en jeu — ce que ce document
+> décrit plus bas (plateforme heightmap, jardinage, indicateurs d'outils...)
+> correspond à ce prototype mis de côté, pas à l'état actuel du jeu. Portage
+> ou réécriture de ces systèmes sur la nouvelle base : à planifier, voir
+> `TASKS.md`. Détails dans "Ce qui change par rapport au prototype existant".
+
 ## Pitch
 
 Deux joueurs sont coincés sur une immense plateforme flottante (ou île isolée
@@ -358,27 +370,39 @@ pour qu'aucune sauvegarde ne "perde" une partie de plusieurs heures.
 
 ## Ce qui change par rapport au prototype existant
 
-Le premier prototype technique (menu héberger/rejoindre + capsule FPS sur un
-sol plat) reste utile pour la partie réseau (connexion ENet, synchronisation
-de position), mais presque tout le reste doit être repensé :
+Historique des bases techniques successives du projet :
 
-- caméra FPS → caméra 3e personne à l'épaule,
-- sol plat unique → terrain voxel généré proceduralement,
-- pas d'interaction avec le monde → système complet de voxels
-  cassables/plaçables,
-- pas d'inventaire/survie → jauges + inventaire + artisanat.
+1. **Prototype réseau initial** (menu héberger/rejoindre + capsule FPS sur un
+   sol plat). Utile pour la partie réseau (connexion ENet, synchronisation de
+   position) ; `autoload/network.gd` en descend encore aujourd'hui.
+2. **Prototype heightmap** (`scenes/world/` + `scenes/player/`, construit
+   ensuite) : caméra 3e personne, plateforme générée par heightmap (pas une
+   vraie grille de voxels), creuser/construire par colonne avec effondrement,
+   cycle jour/nuit, météo, végétation, un premier artefact jouable (l'horloge),
+   puis toute la boucle de survie/jardinage (faim/soif, houe, seau, parcelles
+   de culture, sélecteur d'outil actif). **Mis de côté le 2026-09-17** au
+   profit du point 3 — voir la note en haut de ce document. Le code reste dans
+   le dépôt à titre de référence pour porter ces systèmes plus tard.
+3. **Vraie grille de voxels** (`scenes/voxel_world/`, PR #44 de Guillaume,
+   adoptée le 2026-09-17) : extension `godot_voxel` (Zylann), île générée par
+   grille de voxels avec biomes, grottes et rivières, caméra 3e personne par
+   sonde à sphère (pas de SpringArm3D — résout l'accroc de clipping identifié
+   sur le prototype précédent). C'est la base active du jeu. Ce que ce
+   document décrit plus bas (survie, jardinage, quête, artefacts...) reste la
+   direction visée pour le *contenu* du jeu, mais reste à reconstruire ou
+   porter sur cette nouvelle base technique — rien de tout ça n'existe encore
+   dans `scenes/voxel_world/` à ce jour.
 
-Autrement dit : la base réseau (`autoload/network.gd`) reste probablement
-valable, mais `scenes/player` et `scenes/world` vont être largement réécrits.
-À discuter ensemble avant de commencer pour éviter que chacun parte sur une
-architecture voxel différente (voir `TASKS.md`).
+À discuter ensemble avant de commencer un portage, pour éviter que chacun
+parte sur une architecture différente (voir `TASKS.md`).
 
 Point technique important induit par la quête **partagée** : il ne suffira
-pas de synchroniser la position des joueurs comme dans le prototype actuel.
-Il faudra aussi synchroniser l'état du monde (voxels modifiés), la
-progression de la quête, et l'état du dragon entre les deux pairs — l'hôte
-fera probablement autorité sur ces données, un peu comme il l'est déjà pour
-le spawn des joueurs.
+pas de synchroniser la position des joueurs. Il faudra aussi synchroniser
+l'état du monde (voxels modifiés), la progression de la quête, et l'état du
+dragon entre les deux pairs — l'hôte fera probablement autorité sur ces
+données, un peu comme il l'est déjà pour le spawn des joueurs. Guillaume a
+déjà noté des manques de synchronisation multijoueur côté voxel_world
+(voir issue #31) à traiter avant de construire du contenu dessus.
 
 ## Portée et étapes proposées
 
