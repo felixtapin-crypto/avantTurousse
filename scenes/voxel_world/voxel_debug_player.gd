@@ -34,6 +34,12 @@ const JUMP_VELOCITY := 5.5
 # varier la portee avec le zoom.
 const REACH := 8.0
 
+# Marge ajoutee au rayon du pinceau pour refuser un depot trop proche du
+# corps (capsule de rayon 0.4, hauteur 1.8 — voir `_edit`). Genereuse plutot
+# que calculee au plus juste sur la capsule exacte : le but est d'etre
+# largement en dehors de tout chevauchement, pas de raser la limite.
+const BUILD_SAFETY_MARGIN := 1.0
+
 signal edit_refused(reason: String)
 
 @onready var camera: Camera3D = $Camera3D
@@ -261,6 +267,19 @@ func _edit(remove: bool) -> void:
 	if not remove and carried <= 0:
 		edit_refused.emit("Rien a deverser.")
 		return
+
+	# UN DEPOT NE PEUT PAS CHEVAUCHER LE PERSONNAGE.
+	#
+	# Materialiser une sphere solide a l'interieur de la capsule de collision
+	# force le moteur physique a l'en ejecter d'un coup, assez fort pour
+	# traverser le reste du terrain et tomber hors de la carte (constate en
+	# jeu). Creuser sous ses pieds ne pose pas ce probleme — enlever de la
+	# matiere ne pousse rien, ca laisse juste tomber normalement.
+	if not remove:
+		var body_center := global_position + Vector3.UP * 0.9
+		if center.distance_to(body_center) < brush_radius + BUILD_SAFETY_MARGIN:
+			edit_refused.emit("Trop pres de vous.")
+			return
 
 	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
 	voxel_tool.do_sphere(center, brush_radius)
