@@ -107,7 +107,7 @@ var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 #
 # Le meme script sert au joueur local et aux avatars distants, et c'est
 # l'AUTORITE qui les separe. Le nom du noeud est l'identifiant du pair (pose
-# par `smooth_voxel_world._spawn_player`), donc chacun sait en entrant dans
+# par `smooth_voxel_world._add_player`), donc chacun sait en entrant dans
 # l'arbre s'il se pilote ou s'il est pilote d'ailleurs.
 #
 # Un avatar distant ne lit pas les touches, ne calcule pas sa physique et
