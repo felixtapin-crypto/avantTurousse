@@ -1,0 +1,49 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scenes/voxel_world/smooth_voxel_world.gd" id="SmoothVoxelWorldScript"]
+[ext_resource type="Script" path="res://scenes/voxel_world/voxel_debug_player.gd" id="VoxelDebugPlayerScript"]
+
+[sub_resource type="Environment" id="Environment_1"]
+tonemap_mode = 3
+tonemap_white = 6.0
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
+radius = 0.4
+height = 1.8
+
+[node name="SmoothVoxelWorld" type="Node3D"]
+script = ExtResource("SmoothVoxelWorldScript")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-50, -40, 0)
+light_energy = 1.1
+shadow_enabled = true
+shadow_bias = 0.04
+shadow_normal_bias = 3.0
+directional_shadow_mode = 2
+directional_shadow_max_distance = 320.0
+directional_shadow_blend_splits = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_1")
+
+[node name="Player" type="CharacterBody3D" parent="."]
+script = ExtResource("VoxelDebugPlayerScript")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_1")
+
+[node name="Camera3D" type="Camera3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+far = 1200.0
+
+[node name="Hud" type="CanvasLayer" parent="."]
+
+[node name="StatusLabel" type="Label" parent="Hud"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 620.0
+offset_bottom = 40.0
+mouse_filter = 2
+text = "Calcul de la carte..."
