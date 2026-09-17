@@ -30,7 +30,9 @@ extends SceneTree
 #   3. le corps d'en face BOUGE quand son proprietaire bouge ;
 #   4. un creusement fait par l'hote se voit chez le client PARTI AILLEURS,
 #      quand il revient ;
-#   5. l'heure d'un client desynchronise est recalee sur celle de l'hote.
+#   5. la MATIERE d'un depot voyage avec sa geometrie ;
+#   6. un objet au sol ne se ramasse QU'UNE FOIS, meme si les deux le veulent ;
+#   7. l'heure d'un client desynchronise est recalee sur celle de l'hote.
 #
 # Il ne regarde PAS ce qui se voit a l'oeil : le rendu, la camera, l'interface.
 
@@ -73,7 +75,7 @@ const T_REPORT := 54.0
 # generation, libere le spectateur et decharge ses blocs. Le client lisait alors
 # 100 partout et croyait voir un creusement la ou il ne voyait plus rien du
 # tout — un controle qui passait pour la mauvaise raison.
-const T_LINGER := 14.0
+const T_LINGER := 18.0
 
 # De combien on pousse le corps local, a chaque fois.
 const NUDGE := Vector3(6.0, 0.0, 6.0)
@@ -177,6 +179,10 @@ func _run() -> void:
 	# diffuse a tous les pairs, retire depuis : le synchroniseur pousse la zone
 	# modifiee a ceux qui la regardent, et ce controle-ci le verifie.
 	var mine := home + Vector3(7.0, -8.0, 0.0)
+	# Point de DEPOT, a l'oppose : loin des corps, et deja dans la roche, donc
+	# sans consequence physique. Ce qu'on y regarde n'est pas la geometrie mais
+	# la MATIERE — voir le controle en fin de course.
+	var dropped := home + Vector3(-9.0, -8.0, 0.0)
 	await create_timer(T_NEAR - T_RETURN).timeout
 	# Releve JUSTE AVANT le creusement : au retour, la zone n est pas encore
 	# rechargee chez le client, et un bloc absent se lit 100.
@@ -184,6 +190,12 @@ func _run() -> void:
 	if _role == "client":
 		_world.request_terrain_edit(mine, 3.0, true)
 		_say("le client creuse a cote de l'hote")
+	else:
+		# DEPOT, et non creusement : c'est le seul geste qui ecrit aussi la
+		# MATIERE. La geometrie voyageait deja ; ce qu'on veut savoir ici, c'est
+		# si la terre arrive en terre chez l'autre ou si elle y repousse en herbe.
+		_world.request_terrain_edit(dropped, 3.0, false)
+		_say("l'hote depose de la terre")
 
 	await create_timer(T_DESYNC - T_NEAR).timeout
 	if _role == "client":
@@ -213,11 +225,90 @@ func _run() -> void:
 	_check("le creusement de l'hote se voit ici",
 		before < 0.0 and after > 0.0 and after < 50.0,
 		"distance signee %.3f -> %.3f" % [before, after])
+	# LA MATIERE VOYAGE-T-ELLE AVEC LA GEOMETRIE ?
+	#
+	# Un depot pose une sphere solide ET la peint en terre : `do_sphere` ne
+	# touche que la geometrie, la matiere des voxels neufs resterait a sa valeur
+	# par defaut, qui est l'herbe. Comme l'hote renvoie des BLOCS ENTIERS, tous
+	# canaux confondus, les deux doivent se decider chez lui — sinon sa version
+	# verte revient ecraser la terre peinte chez le creuseur, et le depot
+	# reverdit chez tout le monde.
+	var layer := _layer_at(dropped)
+	_check("le depot de l'hote est en TERRE ici",
+		layer == TerrainGenerator.Layer.DIRT,
+		"matiere dominante %d (terre = %d)" % [layer, TerrainGenerator.Layer.DIRT])
+
+	await _check_pickup()
+
 	if _role == "client":
 		_check("l'heure est recalee sur celle de l'hote",
 			_world._sky.time_of_day > 0.02,
 			"il est %s" % _world._sky.clock())
 	_finish()
+
+
+# UN OBJET NE SE RAMASSE QU'UNE FOIS, MEME SI LES DEUX LE DEMANDENT.
+#
+# Les objets sont tires de la graine : les deux pairs ont les memes, au meme
+# rang. On demande donc LE MEME au meme instant, des deux cotes, et l'on
+# verifie que l'hote n'en accorde qu'un — l'objet disparait chez tout le monde,
+# mais un seul inventaire s'en trouve garni.
+#
+# C'est le controle qui manquait : le ramassage se decidait sur place, donc
+# chacun prenait sa copie du meme caillou.
+func _check_pickup() -> void:
+	# LE MEME RANG DES DEUX COTES, en dur.
+	#
+	# Un premier jet demandait « le premier objet encore la ». Les deux n'ont
+	# alors pas demande le meme : l'hote avait deja pris le rang 0, et il avait
+	# disparu chez le client, qui s'est rabattu sur le rang 1. Chacun repartait
+	# avec un objet — et le controle criait a la duplication alors qu'il ne
+	# mettait personne en concurrence. Designer le rang lui-meme est la seule
+	# facon de faire porter la demande sur un objet unique.
+	const INDEX := 0
+	# Le premier distribue est un caillou (voir `_scatter_items`), et on ne peut
+	# pas le lire sur l'objet : chez le client, il a peut-etre deja disparu.
+	var item_id := ItemCatalog.Id.ROCK
+	var before: int = _world._local_player.inventory.count(item_id)
+	_world.request_pickup(INDEX)
+	await create_timer(3.0).timeout
+	var after: int = _world._local_player.inventory.count(item_id)
+
+	_check("l'objet disparait chez les deux",
+		_world._pickup_at(INDEX) == null, "rang %d" % INDEX)
+	# L'hote demande une seconde avant le client — c'est le decalage de
+	# demarrage sur lequel tout le banc repose. Il l'emporte donc, et le client
+	# repart les mains vides : c'est exactement ce que l'ancien ramassage local
+	# ne faisait pas, les deux se servant dans leur copie.
+	if _role == "hote":
+		_check("l'hote, arrive le premier, l'obtient", after == before + 1,
+			"inventaire %d -> %d" % [before, after])
+	else:
+		_check("le client, arrive apres, n'obtient rien", after == before,
+			"inventaire %d -> %d" % [before, after])
+
+
+# Matiere dominante d'un voxel : quatre index, quatre poids, on rend celui qui
+# pese le plus. C'est l'encodage que `TerrainGenerator` ecrit et que le shader
+# lit — le relire ici, c'est verifier ce qui sera reellement affiche.
+func _layer_at(at: Vector3) -> int:
+	if _world._tool == null:
+		return -1
+	var pos := Vector3i(at.round())
+	_world._tool.channel = VoxelBuffer.CHANNEL_INDICES
+	var indices := VoxelTool.u16_indices_to_vec4i(_world._tool.get_voxel(pos))
+	_world._tool.channel = VoxelBuffer.CHANNEL_WEIGHTS
+	var weights := VoxelTool.u16_weights_to_color(_world._tool.get_voxel(pos))
+	# Le reste du monde suppose le canal de distance signee actif.
+	_world._tool.channel = VoxelBuffer.CHANNEL_SDF
+
+	var best := -1
+	var best_weight := -1.0
+	for k in 4:
+		if weights[k] > best_weight:
+			best_weight = weights[k]
+			best = indices[k]
+	return best
 
 
 func _remote_body() -> Node3D:

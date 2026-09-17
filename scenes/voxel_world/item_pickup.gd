@@ -12,12 +12,28 @@ extends Area3D
 # creusement (tres frequent) pour servir un ramassage tres rare serait
 # disproportionne ; le contact colle mieux a "trouve en explorant."
 
-signal picked_up(item_id: int)
-signal pickup_refused(reason: String)
+# ===========================================================================
+# UN OBJET NE SE RAMASSE PLUS TOUT SEUL
+# ===========================================================================
+#
+# Il le faisait : le contact creditait l'inventaire sur place et l'objet
+# disparaissait. Dans une partie a deux, les objets sont tires de la GRAINE,
+# donc les deux joueurs voient les memes cailloux aux memes endroits — et tous
+# deux pouvaient ramasser LE MEME. Chacun en obtenait un, et il ne disparaissait
+# que pour celui qui l'avait touche. Un monde partage ou les objets se dupliquent.
+#
+# Le contact ne fait donc plus que DEMANDER. C'est l'hote qui tranche, et sa
+# reponse va a tout le monde — meme forme que pour le creusement, voir
+# `smooth_voxel_world.request_pickup`.
+signal pickup_requested(index: int)
 
 @export var item_id: int = ItemCatalog.Id.ROCK
 
-var _collected := false
+# Rang de cet objet dans la distribution, identique chez tous les pairs : elle
+# se rejoue a partir de la graine et de la meme carte, donc le meme rang designe
+# partout le meme objet. C'est ce qui permet a l'hote de dire « le troisieme est
+# pris » sans avoir a decrire une position.
+var index := -1
 
 
 func _ready() -> void:
@@ -43,18 +59,11 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 
 
+# Le groupe « players » ne contient QUE le corps qu'on pilote (voir
+# `VoxelDebugPlayer._ready`) : l'avatar du compagnon peut donc traverser un
+# objet sans rien declencher chez nous, ce qui est bien — c'est a lui de le
+# demander depuis sa propre machine.
 func _on_body_entered(body: Node3D) -> void:
-	if _collected or not body.is_in_group("players"):
+	if not body.is_in_group("players"):
 		return
-	if not ("inventory" in body):
-		return
-
-	var inventory: Inventory = body.inventory
-	if not inventory.has_room(item_id):
-		pickup_refused.emit("Inventaire plein.")
-		return
-
-	inventory.add(item_id, 1)
-	_collected = true
-	picked_up.emit(item_id)
-	queue_free()
+	pickup_requested.emit(index)
