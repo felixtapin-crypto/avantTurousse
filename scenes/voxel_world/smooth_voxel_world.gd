@@ -22,6 +22,7 @@ var _water_veil: ColorRect
 var _camera: Camera3D
 var _pause_menu: PauseMenu
 var _settings_screen: SettingsScreen
+var _crosshair: Crosshair
 var _viewer: VoxelViewer
 # Provisoire : voir la section LAMPE DE GROTTE en bas de fichier.
 var _cave_lamp: OmniLight3D
@@ -63,6 +64,7 @@ func _ready() -> void:
 	# de pause, puis la barre de sortie. Quitter depuis le menu de pause doit
 	# montrer le voile de transition, et non le menu par-dessus.
 	_build_water_veil()
+	_build_crosshair()
 	_build_pause_menu()
 	_build_exit_bar()
 	_watch_network()
@@ -266,6 +268,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		_open_pause()
 
 
+func _build_crosshair() -> void:
+	_crosshair = Crosshair.new()
+	_crosshair.name = "Crosshair"
+	_crosshair.anchor_left = 0.5
+	_crosshair.anchor_top = 0.5
+	_crosshair.anchor_right = 0.5
+	_crosshair.anchor_bottom = 0.5
+	var half := Crosshair.SIZE / 2.0
+	_crosshair.offset_left = -half
+	_crosshair.offset_top = -half
+	_crosshair.offset_right = half
+	_crosshair.offset_bottom = half
+	$Hud.add_child(_crosshair)
+
+
 func _build_pause_menu() -> void:
 	_pause_menu = PauseMenu.new()
 	_pause_menu.name = "PauseMenu"
@@ -299,11 +316,11 @@ func _build_pause_menu() -> void:
 # ravin. Le menu et l'ecran des parametres sont en PROCESS_MODE_ALWAYS, sans
 # quoi ils se figeraient avec le reste et ne pourraient plus se refermer.
 func _open_pause() -> void:
-	# On peut arriver ici EN PLEIN GLISSE DE CAMERA, bouton droit enfonce, donc
-	# souris capturee. L'arbre se figeant aussitot, le joueur ne recevrait
-	# jamais le relachement qui la rend : le menu s'afficherait sans curseur
+	# La souris est capturee en permanence pendant le jeu (voir
+	# `VoxelDebugPlayer._ready`) : sans ca, le menu s'afficherait sans curseur
 	# pour le cliquer.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_crosshair.visible = false
 	_pause_menu.visible = true
 	get_tree().paused = true
 
@@ -311,6 +328,11 @@ func _open_pause() -> void:
 func _close_pause() -> void:
 	get_tree().paused = false
 	_pause_menu.visible = false
+	# La souris est capturee en permanence pendant le jeu (voir
+	# `VoxelDebugPlayer._ready`) : il faut la recapturer explicitement en
+	# sortant de la pause, sinon elle resterait visible et libre.
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_crosshair.visible = true
 
 
 func _open_settings() -> void:

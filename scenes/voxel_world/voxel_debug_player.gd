@@ -12,18 +12,16 @@ extends CharacterBody3D
 # Le vrai joueur sera porte sur le terrain voxel une fois #29 mergee.
 #
 # ===========================================================================
-# LA SOURIS RESTE LIBRE
+# LA SOURIS EST CAPTUREE EN PERMANENCE PENDANT LE JEU
 # ===========================================================================
 #
-# Le curseur n'est JAMAIS capture en permanence. C'est ce qui permet d'ouvrir
-# le menu de pause, de designer un point du terrain, et de garder la main sur
-# le bureau.
-#
-# Mais un curseur libre ne peut pas piloter un regard : il buterait sur les
-# bords de l'ecran au bout d'un quart de tour. On capture donc PENDANT LE
-# GLISSE, bouton droit enfonce, et on rend le curseur au relachement — Godot
-# le repose exactement la ou il etait. C'est le geste de terrain-3d, d'ou
-# vient aussi le rig de camera.
+# Choix initial (curseur libre, capture seulement bouton droit enfonce,
+# inspire de terrain-3d) inverse sur demande : viser en permanence sans
+# maintenir de bouton, comme un FPS/3e personne classique (Minecraft,
+# Valheim...). Le curseur redevient visible uniquement pendant le menu de
+# pause (voir `SmoothVoxelWorld._open_pause`/`_close_pause`), qui est le seul
+# endroit ou on a encore besoin de cliquer une UI pendant que cette scene
+# tourne.
 
 const WALK_SPEED := 6.0
 const SPRINT_MULTIPLIER := 2.0
@@ -75,7 +73,7 @@ var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 
 func _ready() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	# La camera ignore la transformee du corps : c'est le rig qui la place, en
 	# coordonnees monde. Voir l'avertissement en tete de `player_camera.gd`.
 	camera.top_level = true
@@ -118,8 +116,6 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-			return
 		var motion := event as InputEventMouseMotion
 		_rig.yaw = wrapf(
 			_rig.yaw - motion.relative.x * GameSettings.mouse_sensitivity,
@@ -140,20 +136,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		velocity = Vector3.ZERO
 
 
-# BOUTON DROIT MAINTENU = ON TOURNE LA CAMERA.
-#
-# Le bouton droit ajoutait de la matiere ; il a fallu lui trouver une autre
-# place des lors que le curseur reste libre, parce que l'orbite doit tenir sur
-# un bouton qu'on peut maintenir sans rien declencher. Creuser et batir vivent
-# donc tous les deux sur le bouton GAUCHE, separes par Maj — deux gestes de la
-# meme famille sur la meme touche, ce qui se retient mieux que deux boutons
-# aux roles opposes.
+# Le bouton droit ne pilote plus la camera (elle tourne en permanence, voir
+# la souris capturee en tete de fichier) : il est libre pour un futur usage.
+# Creuser et batir restent tous les deux sur le bouton GAUCHE, separes par
+# Maj — deux gestes de la meme famille sur la meme touche, ce qui se retient
+# mieux que deux boutons aux roles opposes.
 func _on_mouse_button(event: InputEventMouseButton) -> void:
-	if event.button_index == MOUSE_BUTTON_RIGHT:
-		Input.mouse_mode = (Input.MOUSE_MODE_CAPTURED if event.pressed
-			else Input.MOUSE_MODE_VISIBLE)
-		return
-
 	if not event.pressed:
 		return
 
@@ -234,9 +222,13 @@ func _edit(remove: bool) -> void:
 	if voxel_tool == null:
 		return
 
-	var cursor := get_viewport().get_mouse_position()
-	var from := camera.project_ray_origin(cursor)
-	var direction := camera.project_ray_normal(cursor)
+	# Vise le CENTRE DE L'ECRAN (voir `Crosshair`), pas la position OS de la
+	# souris : celle-ci ne bouge plus une fois capturee en permanence, elle
+	# resterait figee au point ou elle a ete capturee au lieu de suivre le
+	# regard.
+	var screen_center := get_viewport().get_visible_rect().size / 2.0
+	var from := camera.project_ray_origin(screen_center)
+	var direction := camera.project_ray_normal(screen_center)
 	# La portee est comptee depuis le PERSONNAGE : on ajoute le bras de la
 	# camera pour que zoomer n'etende pas le pinceau.
 	var arm := from.distance_to(global_position)
