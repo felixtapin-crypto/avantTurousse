@@ -1,3 +1,4 @@
+class_name VoxelDebugPlayer
 extends CharacterBody3D
 
 # Controleur de TEST, volontairement separe du vrai joueur
@@ -49,6 +50,17 @@ var voxel_tool: VoxelTool
 # abri, ce qui est nettement moins naturel au pinceau spherique, et reste a
 # retrancher (voir issue #34).
 var brush_radius := 2.5
+
+# Un creusement REUSSI vaut UNE unite portee, et un depot EN COUTE une : le
+# pinceau (`brush_radius`) est deja l'unite de matiere que `_edit` manipule a
+# chaque coup, compter par coup plutot que tenter d'estimer un volume de SDF
+# reellement retire donne directement le meme repere des deux cotes.
+#
+# Faible au depart pour que la contrainte se sente (revenir deverser avant de
+# pouvoir recreuser) — une capacite qui grandit avec un outil trouve est une
+# suite naturelle, pas encore faite.
+const CARRY_CAPACITY := 8
+var carried := 0
 
 var flying := true
 
@@ -207,12 +219,6 @@ func _physics_process(delta: float) -> void:
 # une sphere, et le mailleur replace la surface la ou la distance signee
 # change de signe.
 #
-# LE RAYON PART DU CURSEUR, et non de l'axe de l'objectif. En vue subjective
-# les deux se confondaient — le centre de l'ecran etait le regard. En vue
-# d'epaule, l'axe de l'objectif passe par la nuque du personnage et vise, a
-# quatre metres de la, un point sans rapport avec ce qu'on montre. Le curseur
-# etant libre, autant s'en servir pour designer.
-#
 # La bedrock n'est pas protegee ici, et ne peut pas l'etre bloc par bloc : le
 # pinceau en couvre plusieurs a la fois. En terrain lisse, la bonne facon de
 # la rendre increusable est de borner la distance signee dans le generateur —
@@ -249,8 +255,16 @@ func _edit(remove: bool) -> void:
 		edit_refused.emit("Zone pas encore chargee.")
 		return
 
+	if remove and carried >= CARRY_CAPACITY:
+		edit_refused.emit("Inventaire plein — direction un depot.")
+		return
+	if not remove and carried <= 0:
+		edit_refused.emit("Rien a deverser.")
+		return
+
 	voxel_tool.mode = VoxelTool.MODE_REMOVE if remove else VoxelTool.MODE_ADD
 	voxel_tool.do_sphere(center, brush_radius)
+	carried += 1 if remove else -1
 
 
 # ===========================================================================

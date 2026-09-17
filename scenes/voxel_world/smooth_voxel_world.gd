@@ -543,13 +543,15 @@ func _process(delta: float) -> void:
 		status_label.text = _message
 		return
 	var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
-	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d%s" % [
+	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d · terre %d/%d%s" % [
 		world_seed,
 		_sky.clock(),
 		Engine.get_frames_per_second(),
 		"vol" if player.flying else "marche",
 		map.biome_name(map.biome_at(cell.x, cell.z)),
 		int(player.position.y),
+		player.carried,
+		VoxelDebugPlayer.CARRY_CAPACITY,
 		_company(),
 	]
 
