@@ -713,7 +713,7 @@ func _apply_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
 	_tool.do_sphere(center, radius)
 	if not remove:
 		_paint_single_material(center, radius, TerrainGenerator.Layer.DIRT)
-		_regrow_grass(center, radius)
+		_regrow_biome_surface(center, radius)
 
 
 # UN DEPOT SORT DE TERRE, PAS D'HERBE.
@@ -734,32 +734,55 @@ func _apply_terrain_edit(center: Vector3, radius: float, remove: bool) -> void:
 # se partage : elle doit s'appliquer partout ou la sphere s'applique, c'est-a-dire
 # chez l'hote, qui est celui dont les blocs font foi.
 
-# Repousse de l'herbe sur un depot laisse a l'air libre, avec le temps.
+# Repousse sur un depot laisse a l'air libre, avec le temps - PAS TOUJOURS DE
+# L'HERBE : la matiere qui reprend est celle de la SURFACE DU BIOME a cet
+# endroit (`map.biome_at`/`surface_block`), sinon un depot de terre sur une
+# plage ou en montagne enneigee finirait vert au bout d'une minute, ce
+# qu'aucun des deux ne ferait naturellement.
 #
 # Duree a calibrer en playtest (voir `FarmPlot.GROWTH_DURATION` pour le meme
-# genre de reglage sur l'ancien prototype). Repeindre en herbe un depot qui a ete
+# genre de reglage sur l'ancien prototype). Repeindre un depot qui a ete
 # recreuse entretemps ne fait rien de visible : sans matiere solide la, la
 # peinture ne colore aucune surface.
-const GRASS_REGROWTH_SECONDS := 60.0
+#
+# Tourne partout ou `_apply_terrain_edit` tourne (client en avance locale ET
+# hote qui fait foi) : deterministe a partir des memes `center`/`radius`, les
+# deux versions convergent sans le moindre message reseau dedie.
+const REGROWTH_SECONDS := 60.0
 
 
-func _regrow_grass(center: Vector3, radius: float) -> void:
-	await get_tree().create_timer(GRASS_REGROWTH_SECONDS).timeout
-	if _tool == null:
+func _regrow_biome_surface(center: Vector3, radius: float) -> void:
+	await get_tree().create_timer(REGROWTH_SECONDS).timeout
+	if _tool == null or map == null:
 		return
-	_paint_single_material(center, radius, TerrainGenerator.Layer.GRASS)
+	var biome := map.biome_at(int(center.x), int(center.z))
+	var layer := TerrainGenerator.layer_for(map.surface_block(biome))
+	_paint_single_material(center, radius, layer)
 
 
-# Peint une sphere d'une SEULE matiere, avec le meme encodage que
-# `TerrainGenerator._single_material` : quatre index CONSECUTIFS a partir de 0
-# (l'ordre depend seulement de `layer`, jamais de ce qu'il y avait avant), et
-# tout le poids sur celui qui correspond a `layer`. Ne marche que pour
-# `layer` < 4 (vrai pour GRASS et DIRT, les deux seuls cas d'usage ici) — au dela
-# l'ordre des quatre index consecutifs changerait la position du poids.
+# Peint une sphere d'une SEULE matiere, avec EXACTEMENT le meme encodage que
+# `TerrainGenerator._single_material`/`_pad_to_four` : les trois emplacements
+# libres recoivent les plus petits index DISTINCTS de `layer` (dans l'ordre
+# 0, 1, 2... en sautant `layer` s'il y apparait), le tout trie, et tout le
+# poids sur celui qui vaut `layer`. Generalise l'ancienne version qui figeait
+# les index a (0,1,2,3) et ne marchait donc que pour `layer` < 4 (GRASS/DIRT)
+# - insuffisant des qu'un biome donne une surface de sable, gravier ou neige
+# (index 4 a 7) a la repousse.
 func _paint_single_material(center: Vector3, radius: float, layer: int) -> void:
-	var indices := VoxelTool.vec4i_to_u16_indices(Vector4i(0, 1, 2, 3))
+	var kept: Array = [layer]
+	for candidate in TerrainGenerator.LAYER_COUNT:
+		if kept.size() >= 4:
+			break
+		if not kept.has(candidate):
+			kept.append(candidate)
+	kept.sort()
+
 	var weights := [0.0, 0.0, 0.0, 0.0]
-	weights[layer] = 1.0
+	for k in 4:
+		if kept[k] == layer:
+			weights[k] = 1.0
+
+	var indices := VoxelTool.vec4i_to_u16_indices(Vector4i(kept[0], kept[1], kept[2], kept[3]))
 	var packed_weights := VoxelTool.color_to_u16_weights(
 		Color(weights[0], weights[1], weights[2], weights[3]))
 

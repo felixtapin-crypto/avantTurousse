@@ -459,7 +459,11 @@ func _build_tables() -> void:
 				Color(weights[0], weights[1], weights[2], weights[3]))))
 
 
-func layer_for(block_type: int) -> int:
+# Statique : ne depend d'aucun etat d'instance, seulement de la
+# correspondance figee ci-dessus. `SmoothVoxelWorld` s'en sert pour retrouver
+# la matiere de surface d'un biome sans avoir besoin d'un `TerrainGenerator`
+# complet (voir `_regrow_biome_surface`).
+static func layer_for(block_type: int) -> int:
 	match block_type:
 		TerrainMaterials.Type.GRASS: return Layer.GRASS
 		TerrainMaterials.Type.DIRT: return Layer.DIRT
