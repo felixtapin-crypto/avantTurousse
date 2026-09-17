@@ -23,6 +23,8 @@ var _camera: Camera3D
 var _pause_menu: PauseMenu
 var _settings_screen: SettingsScreen
 var _crosshair: Crosshair
+var _hotbar: Hotbar
+var _inventory_screen: InventoryScreen
 var _viewer: VoxelViewer
 # Provisoire : voir la section LAMPE DE GROTTE en bas de fichier.
 var _cave_lamp: OmniLight3D
@@ -60,11 +62,16 @@ var _leaving := false
 
 func _ready() -> void:
 	status_label.text = "Calcul de la carte..."
-	# ORDRE D'EMPILEMENT, du fond vers le dessus : le voile d'immersion, le menu
-	# de pause, puis la barre de sortie. Quitter depuis le menu de pause doit
-	# montrer le voile de transition, et non le menu par-dessus.
+	# ORDRE D'EMPILEMENT, du fond vers le dessus : le voile d'immersion, le
+	# viseur, la barre d'outils, l'ecran d'inventaire, le menu de pause, puis
+	# la barre de sortie. Quitter depuis le menu de pause doit montrer le
+	# voile de transition, et non le menu par-dessus ; l'ecran d'inventaire
+	# doit passer au-dessus de la barre d'outils mais rester sous la pause
+	# (la pause prime sur l'inventaire, voir `_open_pause`).
 	_build_water_veil()
 	_build_crosshair()
+	_build_hotbar()
+	_build_inventory_screen()
 	_build_pause_menu()
 	_build_exit_bar()
 	_watch_network()
@@ -119,6 +126,7 @@ func _ready() -> void:
 
 	player.voxel_tool = _tool
 	player.edit_refused.connect(_on_edit_refused)
+	player.inventory_toggle_requested.connect(_toggle_inventory)
 	player.flying = true
 	player.position = _spawn_position()
 	# La camera est en `top_level` : elle ne suit pas un saut de position, il
@@ -135,6 +143,7 @@ func _ready() -> void:
 	_add_sky()
 	_add_sea()
 	_add_rivers()
+	_scatter_items()
 
 	# L'hote annonce SON monde en entrant en partie, et pas avant : c'est ici
 	# que ses reglages sont arretes. Un client connecte plus tot patiente sur
@@ -283,6 +292,29 @@ func _build_crosshair() -> void:
 	$Hud.add_child(_crosshair)
 
 
+func _build_hotbar() -> void:
+	_hotbar = Hotbar.new()
+	_hotbar.name = "Hotbar"
+	$Hud.add_child(_hotbar)
+
+
+func _build_inventory_screen() -> void:
+	_inventory_screen = InventoryScreen.new()
+	_inventory_screen.name = "InventoryScreen"
+	_inventory_screen.closed.connect(func(): _crosshair.visible = true)
+	$Hud.add_child(_inventory_screen)
+
+
+# Bascule appelee par `VoxelDebugPlayer.inventory_toggle_requested` (le
+# joueur ne construit pas lui-meme l'ecran, qui vit dans le monde).
+func _toggle_inventory() -> void:
+	if _inventory_screen.visible:
+		_inventory_screen.close()
+	else:
+		_crosshair.visible = false
+		_inventory_screen.open(player.inventory)
+
+
 func _build_pause_menu() -> void:
 	_pause_menu = PauseMenu.new()
 	_pause_menu.name = "PauseMenu"
@@ -316,11 +348,16 @@ func _build_pause_menu() -> void:
 # ravin. Le menu et l'ecran des parametres sont en PROCESS_MODE_ALWAYS, sans
 # quoi ils se figeraient avec le reste et ne pourraient plus se refermer.
 func _open_pause() -> void:
+	# La pause PRIME sur l'inventaire : les deux liberent la souris de la
+	# meme facon, mais seule la pause fige l'arbre - les garder ouverts tous
+	# les deux a la fois n'aurait pas de sens.
+	_inventory_screen.close()
 	# La souris est capturee en permanence pendant le jeu (voir
 	# `VoxelDebugPlayer._ready`) : sans ca, le menu s'afficherait sans curseur
 	# pour le cliquer.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_crosshair.visible = false
+	_hotbar.visible = false
 	_pause_menu.visible = true
 	get_tree().paused = true
 
@@ -333,6 +370,7 @@ func _close_pause() -> void:
 	# sortant de la pause, sinon elle resterait visible et libre.
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_crosshair.visible = true
+	_hotbar.visible = true
 
 
 func _open_settings() -> void:
@@ -543,17 +581,16 @@ func _process(delta: float) -> void:
 		status_label.text = _message
 		return
 	var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
-	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d · terre %d/%d%s" % [
+	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d%s" % [
 		world_seed,
 		_sky.clock(),
 		Engine.get_frames_per_second(),
 		"vol" if player.flying else "marche",
 		map.biome_name(map.biome_at(cell.x, cell.z)),
 		int(player.position.y),
-		player.carried,
-		VoxelDebugPlayer.CARRY_CAPACITY,
 		_company(),
 	]
+	_hotbar.refresh(player.inventory)
 
 
 # Qui est la. RIEN NE LE DISAIT NULLE PART : on hebergeait une partie sans
@@ -580,6 +617,59 @@ func _spawn_position() -> Vector3:
 			if map.terrain_height(x, z) > WorldMap.SEA_LEVEL:
 				return Vector3(float(x) + 0.5, float(map.terrain_height(x, z)) + 3.0, float(z) + 0.5)
 	return Vector3(float(center), float(map_height), float(center))
+
+
+# Nombre de cailloux disperses autour du spawn : modeste plutot que
+# ratissable a l'oeil, juste assez pour en croiser quelques-uns sans devoir
+# peigner toute l'ile pour remplir son inventaire.
+const ROCK_COUNT := 15
+# Rayon de dispersion des cailloux, en metres : accessible en une session
+# normale de jeu.
+const ROCK_SCATTER_RADIUS := 100.0
+# Le sac a dos est une trouvaille rare, dans l'esprit des artefacts deja
+# decrits dans DESIGN.md : plus loin que les cailloux, mais toujours a
+# portee raisonnable d'une exploration.
+const BACKPACK_SCATTER_RADIUS := 180.0
+
+
+# Seed FIXE (derivee de `world_seed`, pas de `randi()`) pour que la
+# dispersion reste identique d'une partie a l'autre sur la meme graine -
+# testable, et coherente entre pairs le jour ou ce sera reseaute (voir
+# `_scatter_items`).
+func _scatter_items() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = world_seed + 5000
+
+	for _i in ROCK_COUNT:
+		_spawn_pickup_near_spawn(rng, ItemCatalog.Id.ROCK, ROCK_SCATTER_RADIUS)
+	_spawn_pickup_near_spawn(rng, ItemCatalog.Id.BACKPACK, BACKPACK_SCATTER_RADIUS)
+
+
+# Tire une colonne de terre valide (au-dessus du niveau marin, meme critere
+# que `_spawn_position`) dans un disque de `radius` metres autour du spawn,
+# et y pose un `ItemPickup`. Abandonne apres un nombre d'essais borne plutot
+# que boucler indefiniment si le disque tombe surtout en mer.
+func _spawn_pickup_near_spawn(rng: RandomNumberGenerator, item_id: int, radius: float) -> void:
+	var spawn := _spawn_position()
+	const MAX_ATTEMPTS := 40
+	for _attempt in MAX_ATTEMPTS:
+		var angle := rng.randf_range(0.0, TAU)
+		var distance := rng.randf_range(radius * 0.2, radius)
+		var x := int(round(spawn.x + cos(angle) * distance))
+		var z := int(round(spawn.z + sin(angle) * distance))
+		if x < 0 or x >= map_size or z < 0 or z >= map_size:
+			continue
+		if map.terrain_height(x, z) <= WorldMap.SEA_LEVEL:
+			continue
+
+		var pickup := ItemPickup.new()
+		pickup.item_id = item_id
+		pickup.position = Vector3(
+			float(x) + 0.5, float(map.terrain_height(x, z)) + 0.5, float(z) + 0.5)
+		pickup.picked_up.connect(func(_id): _notify("Ramasse : %s." % ItemCatalog.display_name(item_id)))
+		pickup.pickup_refused.connect(_notify)
+		add_child(pickup)
+		return
 
 
 # Ou se trouve l'oeil : sous terre, sous l'eau, ou a l'air libre.
