@@ -18,7 +18,7 @@ extends Control
 
 const PREVIEW_SCENE := "res://scenes/voxel_world/map_preview.tscn"
 const WORLD_SCENE := "res://scenes/voxel_world/smooth_voxel_world.tscn"
-const STRIP_SIZE := Vector2(168, 106)
+const STRIP_SIZE := Vector2(168, 92)
 
 var _entries: Array[Dictionary] = []
 var _selected := 0
@@ -53,71 +53,64 @@ func _unhandled_input(event: InputEvent) -> void:
 			_open()
 		KEY_N:
 			_new_map()
-		KEY_ESCAPE, KEY_F10:
+		KEY_ESCAPE:
+			# Retour a l'accueil, et non plus sortie du jeu : cet ecran n'est
+			# plus le premier depuis que le choix solo / reseau le precede.
+			_go_home()
+		KEY_F10:
 			get_tree().quit()
 
 
 # --- Construction de l'interface ------------------------------------------
 
 func _build_ui() -> void:
-	add_child(IslandUI.backdrop())
+	var rows := IslandUI.page(self)
+	# Le temoin d'hebergement se tait en solo, et ne s'allume que si quelqu'un
+	# attend derriere. Voir `host_status.gd`.
+	rows.add_child(IslandUI.header("← Accueil", _go_home, HostStatus.new()))
 
 	# Le monde retenu occupe le fond, tres assourdi. C'est ce qui remplit la
 	# moitie droite sans y poser d'interface, et ce qui fait qu'on regarde un
 	# lieu plutot qu'une fiche.
+	#
+	# Glisse JUSTE APRES la couleur de nuit posee par `page` et sous tout le
+	# reste : l'ajouter en dernier le mettrait par-dessus l'interface, l'ajouter
+	# avant le ferait recouvrir par cette couleur.
 	_backdrop = TextureRect.new()
 	_backdrop.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_backdrop.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_backdrop.modulate = Color(1.0, 1.0, 1.0, 0.16)
 	add_child(_backdrop)
-
-	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 44)
-	add_child(margin)
-
-	var rows := VBoxContainer.new()
-	rows.add_theme_constant_override("separation", 10)
-	margin.add_child(rows)
+	move_child(_backdrop, 1)
 
 	# --- Fiche du monde retenu ---
 	#
-	# Elle est tenue dans une COLONNE, avec du vide a sa droite. Sans cela les
-	# barres et les boutons s etiraient sur toute la largeur de l ecran, ce qui
-	# les rendait illisibles : une barre de mille cinq cents pixels ne se compare
-	# plus a rien, et le fond n avait plus de place pour respirer.
-	var sheet_row := HBoxContainer.new()
-	sheet_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	rows.add_child(sheet_row)
-
+	# Elle est tenue dans une COLONNE, centree, avec du vide de part et d'autre.
+	# Sans cette colonne les barres et les boutons s etiraient sur toute la
+	# largeur de l ecran, ce qui les rendait illisibles : une barre de mille cinq
+	# cents pixels ne se compare plus a rien, et le fond n avait plus de place
+	# pour respirer.
 	var sheet := VBoxContainer.new()
-	sheet.add_theme_constant_override("separation", 4)
+	sheet.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	sheet.custom_minimum_size = Vector2(520, 0)
-	sheet_row.add_child(sheet)
+	rows.add_child(IslandUI.centered(sheet))
 
-	var breathing := Control.new()
-	breathing.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sheet_row.add_child(breathing)
-
-	sheet.add_child(IslandUI.label("AVANT TOUROUSSE", 14, Color(IslandUI.INK, 0.45)))
-
-	_title = IslandUI.label("", 52, IslandUI.INK)
+	_title = IslandUI.title("")
 	sheet.add_child(_title)
 
 	_subtitle = IslandUI.label("", 17, Color(IslandUI.GOLD, 0.85))
 	sheet.add_child(_subtitle)
 
-	sheet.add_child(IslandUI.gap(10))
+	sheet.add_child(IslandUI.group_gap())
 	_portrait = IslandUI.label("", 15, Color(IslandUI.INK, 0.62))
 	_portrait.custom_minimum_size = Vector2(460, 0)
 	_portrait.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sheet.add_child(_portrait)
 
-	sheet.add_child(IslandUI.gap(18))
+	sheet.add_child(IslandUI.group_gap())
 	_stats = VBoxContainer.new()
-	_stats.add_theme_constant_override("separation", 10)
+	_stats.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	sheet.add_child(_stats)
 
 	_empty_note = IslandUI.label("", 15, Color(IslandUI.INK, 0.55))
@@ -125,9 +118,9 @@ func _build_ui() -> void:
 	_empty_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sheet.add_child(_empty_note)
 
-	sheet.add_child(IslandUI.gap(20))
+	sheet.add_child(IslandUI.group_gap())
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 8)
+	actions.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	actions.custom_minimum_size = Vector2(460, 0)
 
 	_play_button = IslandUI.action_button("Explorer ce monde", IslandUI.GOLD)
@@ -147,22 +140,24 @@ func _build_ui() -> void:
 	rows.add_child(scroll)
 
 	_strip = HBoxContainer.new()
-	_strip.add_theme_constant_override("separation", 10)
+	_strip.add_theme_constant_override("separation", IslandUI.SPACE_ROW)
+	# La pellicule se centre comme le reste. Elle doit s'etirer pour cela : une
+	# rangee laissee a sa taille minimale n'a pas de place ou se centrer.
+	_strip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_strip.alignment = BoxContainer.ALIGNMENT_CENTER
 	scroll.add_child(_strip)
 
-
-	# Pied de page : les touches a gauche, l etat du cache a droite. Le cache est
-	# EXPOSE plutot que cache — c est lui qui remplit cet ecran, et l empreinte
-	# change des qu on retouche un reglage de generation. Le voir evite de se
-	# demander pourquoi des mondes ont disparu.
+	# Pied de page : l etat du cache, a droite. Le cache est EXPOSE plutot que
+	# cache — c est lui qui remplit cet ecran, et l empreinte change des qu on
+	# retouche un reglage de generation. Le voir evite de se demander pourquoi
+	# des mondes ont disparu.
+	#
+	# Le rappel des touches qui tenait la gauche a ete retire : tout ce qu'il
+	# annoncait est deja un bouton a l'ecran, ou la pastille de retour en haut a
+	# droite. Voir la note sur les pieds de page dans `island_ui.gd`.
 	var footer := HBoxContainer.new()
-	footer.add_theme_constant_override("separation", 10)
-
-	var hints := IslandUI.label(
-		"← → choisir     ENTREE explorer     N nouvelle carte     ECHAP quitter",
-		13, Color(IslandUI.INK, 0.40))
-	hints.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	footer.add_child(hints)
+	footer.add_theme_constant_override("separation", IslandUI.SPACE_ROW)
+	footer.add_child(IslandUI.spacer())
 
 	_cache_label = IslandUI.label("", 12, Color(IslandUI.INK, 0.35))
 	footer.add_child(_cache_label)
@@ -370,6 +365,13 @@ func _rebuild_strip() -> void:
 # bon. Une carte se retrouve a l'identique en ressaisissant sa graine, puisque
 # c'est tout ce dont depend le monde — le cache ne fait qu'eviter d'en repayer
 # le calcul.
+# Le serveur eventuellement ouvert est ferme par l'ecran d'accueil lui-meme,
+# qui appelle `Network.leave_game()` en arrivant : un seul endroit sait ce que
+# veut dire « repartir de zero ».
+func _go_home() -> void:
+	get_tree().change_scene_to_file("res://scenes/main_menu/main_menu.tscn")
+
+
 func _clear_cache() -> void:
 	MapCache.clear()
 	_entries = []

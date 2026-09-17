@@ -116,47 +116,50 @@ func _exit_tree() -> void:
 # --- Construction de l'interface ------------------------------------------
 
 func _build_ui() -> void:
-	var background := ColorRect.new()
-	background.color = BG
-	background.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(background)
+	var rows := IslandUI.page(self)
 
-	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 28)
-	add_child(margin)
+	# L'en-tete appartient a la PAGE et non a la colonne de gauche, ou il se
+	# trouvait. Il y etait visuellement au bon endroit par coincidence — la
+	# colonne commence a gauche — mais il se serait deplace au premier
+	# changement de mise en page, et il ne suivait pas les memes marges que les
+	# autres ecrans.
+	_status = _label("", 13, Color(LAGOON, 0.9))
+	# Deux etats se suivent dans l'en-tete : celui de la GENERATION, qui est le
+	# sujet de cet ecran, puis celui de l'HEBERGEMENT, qui le traverse. Le
+	# second se tait en solo — voir `host_status.gd`.
+	var states := HBoxContainer.new()
+	states.add_theme_constant_override("separation", IslandUI.SPACE_ROW)
+	states.add_child(_status)
+	states.add_child(HostStatus.new())
+	rows.add_child(IslandUI.header("← Retour aux mondes", _back_to_menu, states))
 
 	var columns := HBoxContainer.new()
-	columns.add_theme_constant_override("separation", 28)
-	margin.add_child(columns)
+	columns.add_theme_constant_override("separation", IslandUI.SPACE_GROUP)
+	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rows.add_child(columns)
 
 	columns.add_child(_build_map_column())
-	columns.add_child(_build_side_column())
+
+	# La colonne de reglages est DEROULABLE, et ce n'est pas une precaution de
+	# confort.
+	#
+	# C'est un empilement dense — seed, etendue, duree du jour, heure, mesures,
+	# barres de biomes — dont la hauteur minimale dictait celle de la page. Elle
+	# tenait de justesse dans la fenetre par defaut, et la barre de navigation a
+	# suffi a la faire deborder : la carte s'est alors etiree hors de l'ecran,
+	# puisque rien ne la bornait plus. Dans un `ScrollContainer`, cette colonne
+	# ne commande plus rien.
+	var side_scroll := ScrollContainer.new()
+	side_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	side_scroll.custom_minimum_size = Vector2(336, 0)
+	side_scroll.add_child(_build_side_column())
+	columns.add_child(side_scroll)
 
 
 func _build_map_column() -> Control:
 	var column := VBoxContainer.new()
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	column.add_theme_constant_override("separation", 14)
-
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 12)
-
-	# Le retour est dans l EN-TETE, a gauche, la ou on cherche une navigation.
-	# Il a d abord ete pose a cote de "Au hasard", ou il se lisait comme une
-	# action sur la graine et non comme une sortie d ecran.
-	var back := _pill("← Retour aux mondes")
-	back.pressed.connect(_back_to_menu)
-	header.add_child(back)
-
-	header.add_child(_label("AVANT TOUROUSSE", 13, Color(INK, 0.45)))
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(spacer)
-	_status = _label("", 13, Color(LAGOON, 0.9))
-	header.add_child(_status)
-	column.add_child(header)
+	column.add_theme_constant_override("separation", IslandUI.SPACE_ROW)
 
 	# La carte est encadree d'un liseré discret : elle doit se lire comme une
 	# piece posee sur la table, pas comme un widget colle au fond.
@@ -177,8 +180,13 @@ func _build_map_column() -> Control:
 	frame.add_child(_preview)
 	column.add_child(frame)
 
-	var layer_bar := HBoxContainer.new()
-	layer_bar.add_theme_constant_override("separation", 6)
+	# Barre de couches en FLUX et non en rangee fixe : neuf pastilles alignees
+	# imposaient a la page pres de neuf cents pixels de largeur minimale, et la
+	# colonne de reglages passait donc hors de l'ecran dans la fenetre par
+	# defaut. En flux, elle retourne a la ligne et ne commande plus rien.
+	var layer_bar := HFlowContainer.new()
+	layer_bar.add_theme_constant_override("h_separation", IslandUI.SPACE_TIGHT)
+	layer_bar.add_theme_constant_override("v_separation", IslandUI.SPACE_TIGHT)
 	for i in RENDER.LAYERS.size():
 		var button := _pill(RENDER.LAYERS[i]["name"])
 		var index := i
@@ -202,7 +210,7 @@ func _build_map_column() -> Control:
 func _build_side_column() -> Control:
 	var side := VBoxContainer.new()
 	side.custom_minimum_size = Vector2(320, 0)
-	side.add_theme_constant_override("separation", 10)
+	side.add_theme_constant_override("separation", IslandUI.SPACE_ROW)
 
 	side.add_child(_caption("SEED — MODIFIABLE"))
 	# Champ de saisie et non simple libelle : une seed qui donne un bon monde
@@ -220,7 +228,7 @@ func _build_side_column() -> Control:
 	side.add_child(_seed_edit)
 
 	var seed_row := HBoxContainer.new()
-	seed_row.add_theme_constant_override("separation", 6)
+	seed_row.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	var reroll := _pill("Au hasard")
 	reroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reroll.pressed.connect(_on_reroll)
@@ -230,7 +238,7 @@ func _build_side_column() -> Control:
 	side.add_child(_gap(10))
 	side.add_child(_caption("ETENDUE DU MONDE"))
 	var size_row := HBoxContainer.new()
-	size_row.add_theme_constant_override("separation", 6)
+	size_row.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	for i in SIZES.size():
 		var button := _pill("%d" % SIZES[i])
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -246,7 +254,7 @@ func _build_side_column() -> Control:
 	side.add_child(_gap(10))
 	side.add_child(_caption("DUREE D'UN JOUR"))
 	var day_row := HBoxContainer.new()
-	day_row.add_theme_constant_override("separation", 6)
+	day_row.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	for i in DAY_LENGTHS.size():
 		var button := _pill(DAY_LABELS[i])
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -258,7 +266,7 @@ func _build_side_column() -> Control:
 
 	side.add_child(_caption("HEURE DE DEPART"))
 	var hour_row := HBoxContainer.new()
-	hour_row.add_theme_constant_override("separation", 6)
+	hour_row.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	for i in START_HOURS.size():
 		var button := _pill(HOUR_LABELS[i])
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -270,7 +278,7 @@ func _build_side_column() -> Control:
 
 	side.add_child(_gap(10))
 	var figures := HBoxContainer.new()
-	figures.add_theme_constant_override("separation", 18)
+	figures.add_theme_constant_override("separation", IslandUI.SPACE_GROUP)
 
 	var land_box := VBoxContainer.new()
 	land_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -291,7 +299,7 @@ func _build_side_column() -> Control:
 	side.add_child(_gap(10))
 	side.add_child(_caption("BIOMES"))
 	_biome_rows = VBoxContainer.new()
-	_biome_rows.add_theme_constant_override("separation", 7)
+	_biome_rows.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	_biome_rows.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	side.add_child(_biome_rows)
 
@@ -299,7 +307,7 @@ func _build_side_column() -> Control:
 	# qu'on retouche une constante de generation, et le voir a l'ecran evite de
 	# se demander si un monde a bien ete recalcule.
 	var cache_row := HBoxContainer.new()
-	cache_row.add_theme_constant_override("separation", 6)
+	cache_row.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 	_cache_label = _label("", 11, Color(INK, 0.40))
 	_cache_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cache_row.add_child(_cache_label)
@@ -335,7 +343,7 @@ func _build_side_column() -> Control:
 	# Les deux actions partagent la meme ligne : generer et partir sont les deux
 	# issues de cet ecran, et rien ne justifie d'en releguer une plus haut.
 	var action_row := HBoxContainer.new()
-	action_row.add_theme_constant_override("separation", 8)
+	action_row.add_theme_constant_override("separation", IslandUI.SPACE_TIGHT)
 
 	_generate_button = _action_button("Generer", LAGOON)
 	_generate_button.pressed.connect(_on_seed_entered)
