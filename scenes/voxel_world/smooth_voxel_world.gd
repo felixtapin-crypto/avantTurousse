@@ -14,13 +14,15 @@ extends Node3D
 
 @onready var player: CharacterBody3D = $Player
 @onready var status_label: Label = $Hud/StatusLabel
-@onready var help_label: Label = $Hud/HelpLabel
 
 var _exit_bar: Control
 var _exit_fill: ColorRect
 var _exit_label: Label
 var _water_veil: ColorRect
 var _camera: Camera3D
+var _pause_menu: PauseMenu
+var _settings_screen: SettingsScreen
+var _viewer: VoxelViewer
 # Provisoire : voir la section LAMPE DE GROTTE en bas de fichier.
 var _cave_lamp: OmniLight3D
 
@@ -51,13 +53,23 @@ var _message_timer := 0.0
 var _sky: SkyCycle
 var _sea: Sea
 var _river_splines: RiverSplines
+# La sortie est-elle engagee ? Voir `_unhandled_input` et `_announce_exit`.
+var _leaving := false
 
 
 func _ready() -> void:
-	help_label.text = "ZQSD deplacer · Souris regarder · F vol/marche · Maj descendre (vol) ou courir\nClic gauche creuser · Clic droit ajouter · Echap liberer la souris · M menu des mondes · F10 quitter"
 	status_label.text = "Calcul de la carte..."
-	_build_exit_bar()
+	# ORDRE D'EMPILEMENT, du fond vers le dessus : le voile d'immersion, le menu
+	# de pause, puis la barre de sortie. Quitter depuis le menu de pause doit
+	# montrer le voile de transition, et non le menu par-dessus.
 	_build_water_veil()
+	_build_pause_menu()
+	_build_exit_bar()
+	_watch_network()
+
+	# La distance de vue est un REGLAGE DU JOUEUR : elle ne depend ni de la
+	# carte ni de la partie, et elle se retrouve d'une session a l'autre.
+	view_distance = GameSettings.view_distance
 
 	# Reglages venus de l'ecran d'apercu, si la partie est passee par lui.
 	world_seed = WorldSettings.seed_value
@@ -96,17 +108,20 @@ func _ready() -> void:
 	# En lisse, l'outil travaille sur la distance signee, pas sur un type.
 	_tool.channel = VoxelBuffer.CHANNEL_SDF
 
-	var viewer := VoxelViewer.new()
-	viewer.name = "VoxelViewer"
-	viewer.view_distance = view_distance
-	viewer.requires_visuals = true
-	viewer.requires_collisions = true
-	player.add_child(viewer)
+	_viewer = VoxelViewer.new()
+	_viewer.name = "VoxelViewer"
+	_viewer.view_distance = view_distance
+	_viewer.requires_visuals = true
+	_viewer.requires_collisions = true
+	player.add_child(_viewer)
 
 	player.voxel_tool = _tool
 	player.edit_refused.connect(_on_edit_refused)
 	player.flying = true
 	player.position = _spawn_position()
+	# La camera est en `top_level` : elle ne suit pas un saut de position, il
+	# faut la recoller apres l'apparition. Voir `PlayerCamera.snap`.
+	player.snap_camera()
 
 	# C est l OEIL qui passe sous la surface, et il le fait avant les pieds.
 	var cameras := player.find_children("*", "Camera3D", true, false)
@@ -118,6 +133,12 @@ func _ready() -> void:
 	_add_sky()
 	_add_sea()
 	_add_rivers()
+
+	# L'hote annonce SON monde en entrant en partie, et pas avant : c'est ici
+	# que ses reglages sont arretes. Un client connecte plus tot patiente sur
+	# l'ecran d'accueil jusqu'a ce moment — voir `network.gd`.
+	if Network.is_hosting():
+		Network.announce_world()
 
 	status_label.text = "Carte calculee en %d ms — streaming en cours..." % map_ms
 	# Les entrees de grottes sont annoncees dans la console : sans leurs
@@ -209,28 +230,172 @@ func _terrain_material() -> ShaderMaterial:
 	return material
 
 
-# Sortie du monde : retour a l'ecran de carte, ou fermeture.
+# ===========================================================================
+# SORTIE DU MONDE
+# ===========================================================================
 #
-# Ni l'un ni l'autre n'est sur Echap, qui sert deja a rendre la souris — et
-# c'est justement la touche qu'on presse quand on est perdu. Lui donner en plus
-# la fermeture du jeu ferait quitter une partie a chacun de ces reflexes.
+# ECHAP OUVRE LE MENU DE PAUSE, et c'est la seule facon de sortir d'une partie.
 #
-# `M` repasse par l'ecran de configuration, donc par le CACHE : revenir sur la
-# meme graine et la meme taille ne recalcule rien.
+# Avant, trois touches se partageaient la sortie sans qu'aucune ne la dise :
+# `M` renvoyait au menu des mondes, `F10` fermait le jeu, et `Echap` ne faisait
+# que rendre la souris. Les trois n'existaient que dans une ligne d'aide en bas
+# d'ecran — un raccourci ne se propose pas, il se sait, donc elles ne servaient
+# qu'a qui les connaissait deja.
+#
+# Deux d'entre elles sont retirees, et pas seulement remplacees :
+#
+# - `M` menait au MENU DES MONDES, ou un client n'a rien a faire : son monde lui
+#   vient de l'hote, et en choisir un autre n'aurait eu aucun effet. Le menu de
+#   pause remonte a l'accueil, qui ferme proprement la partie.
+# - `F10` fermait le jeu sur une pression, sans confirmation. Annoncee, c'etait
+#   un raccourci ; muette, ce serait un piege. Le menu porte l'action en toutes
+#   lettres.
+#
+# `Echap` n'a plus a rendre la souris : elle n'est plus captive (voir
+# `voxel_debug_player.gd`). C'est ce qui leve l'ancienne tension entre les deux
+# usages de la touche.
+#
+# UNE SORTIE ENGAGEE NE SE REOUVRE PAS. `_announce_exit` avance image par
+# image ; mettre l'arbre en pause pendant qu'elle vide la file l'arreterait au
+# milieu, voile de transition affiche et rien derriere.
 func _unhandled_input(event: InputEvent) -> void:
-	if not event.is_pressed() or event.is_echo():
+	if _leaving:
 		return
-	if not (event is InputEventKey):
-		return
+	if event.is_action_pressed("ui_cancel"):
+		get_viewport().set_input_as_handled()
+		_open_pause()
 
-	match (event as InputEventKey).keycode:
-		KEY_M:
-			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-			await _announce_exit("Retour au menu...")
-			get_tree().change_scene_to_file("res://scenes/voxel_world/world_menu.tscn")
-		KEY_F10:
-			await _announce_exit("Fermeture...")
-			get_tree().quit()
+
+func _build_pause_menu() -> void:
+	_pause_menu = PauseMenu.new()
+	_pause_menu.name = "PauseMenu"
+	_pause_menu.visible = false
+	_pause_menu.resumed.connect(_close_pause)
+	_pause_menu.settings_requested.connect(_open_settings)
+	_pause_menu.home_requested.connect(_go_home)
+	_pause_menu.quit_requested.connect(_quit_to_desktop)
+	$Hud.add_child(_pause_menu)
+
+	# L'ecran des parametres est SUPERPOSE et non ouvert comme scene : changer
+	# de scene demonterait le terrain voxel, soit une file de generation a vider
+	# a l'aller et plusieurs secondes de calcul au retour — pour regler une
+	# sensibilite de souris. Depuis l'accueil, le meme ecran est une vraie
+	# scene ; voir `scenes/settings/settings.gd`.
+	_settings_screen = SettingsScreen.new()
+	_settings_screen.name = "SettingsScreen"
+	# La pastille de retour NOMME sa destination, et d'ici on retombe sur la
+	# pause et non sur l'accueil.
+	_settings_screen.back_label = "Pause"
+	_settings_screen.visible = false
+	_settings_screen.closed.connect(_close_settings)
+	_settings_screen.view_distance_changed.connect(_set_view_distance)
+	$Hud.add_child(_settings_screen)
+
+
+# LA PARTIE S'ARRETE VRAIMENT.
+#
+# Sans `paused`, les touches de marche continueraient d'etre lues pendant qu'on
+# lit le menu : on reviendrait au jeu vingt metres plus loin, ou au fond d'un
+# ravin. Le menu et l'ecran des parametres sont en PROCESS_MODE_ALWAYS, sans
+# quoi ils se figeraient avec le reste et ne pourraient plus se refermer.
+func _open_pause() -> void:
+	# On peut arriver ici EN PLEIN GLISSE DE CAMERA, bouton droit enfonce, donc
+	# souris capturee. L'arbre se figeant aussitot, le joueur ne recevrait
+	# jamais le relachement qui la rend : le menu s'afficherait sans curseur
+	# pour le cliquer.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_pause_menu.visible = true
+	get_tree().paused = true
+
+
+func _close_pause() -> void:
+	get_tree().paused = false
+	_pause_menu.visible = false
+
+
+func _open_settings() -> void:
+	_pause_menu.visible = false
+	_settings_screen.visible = true
+
+
+func _close_settings() -> void:
+	_settings_screen.visible = false
+	_pause_menu.visible = true
+
+
+# La distance de vue s'applique A CHAUD : au terrain, qui decide des blocs a
+# garder, et au spectateur, qui decide de ceux a demander. Regler l'un sans
+# l'autre ferait charger des blocs aussitot jetes.
+func _set_view_distance(meters: int) -> void:
+	view_distance = meters
+	if terrain != null:
+		terrain.max_view_distance = meters
+	if _viewer != null:
+		_viewer.view_distance = meters
+
+
+# Quitter passe par `_announce_exit`, donc par la vidange de la file de
+# generation. La pause est levee AVANT : cette vidange avance image par image,
+# et un arbre en pause ne lui en donnerait aucune.
+func _go_home() -> void:
+	get_tree().paused = false
+	Network.close_world()
+	await _announce_exit("Retour a l'accueil...")
+	get_tree().change_scene_to_file("res://scenes/main_menu/main_menu.tscn")
+
+
+func _quit_to_desktop() -> void:
+	get_tree().paused = false
+	Network.close_world()
+	await _announce_exit("Fermeture...")
+	get_tree().quit()
+
+
+# ===========================================================================
+# RESEAU
+# ===========================================================================
+#
+# LA SCENE DE JEU N'ECOUTAIT RIEN, et c'etait le trou le plus visible de la
+# cinematique d'ecrans : un client dont l'hote fermait la partie restait dans un
+# monde fige, sans un mot, jusqu'a ce qu'il tue la fenetre lui-meme. Rien non
+# plus ne disait qu'un compagnon venait d'arriver.
+#
+# Ce que ces branchements NE FONT PAS : synchroniser la partie. Les positions et
+# le creusement ne traversent toujours pas le fil (voir issue #31). Seule la
+# graine voyage, ce qui suffit a ce que les deux joueurs soient dans la meme
+# ile — mais chacun y est encore seul.
+func _watch_network() -> void:
+	Network.player_connected.connect(_on_player_connected)
+	Network.player_disconnected.connect(_on_player_disconnected)
+	Network.server_disconnected.connect(_on_server_disconnected)
+
+
+func _on_player_connected(id: int, player_name: String) -> void:
+	# Le pair recoit aussi sa propre arrivee ; se l'annoncer n'aurait pas de
+	# sens.
+	if id == multiplayer.get_unique_id():
+		return
+	_notify("%s a rejoint la partie." % player_name)
+
+
+func _on_player_disconnected(_id: int) -> void:
+	_notify("Un joueur a quitte la partie.")
+
+
+# L'hote est parti : il n'y a plus de partie a jouer.
+#
+# On ne reste pas dans le monde « en solo », et c'est delibere : la carte du
+# client vient de l'hote, la partie etait la sienne, et le laisser marcher dans
+# une ile dont le proprietaire est parti donnerait a croire que la connexion
+# tient encore.
+func _on_server_disconnected() -> void:
+	# On peut etre deja en train de sortir : c'est meme le cas courant chez
+	# l'hote, dont le depart provoque ce signal chez lui aussi.
+	if _leaving:
+		return
+	get_tree().paused = false
+	await _announce_exit("L'hote a ferme la partie.")
+	get_tree().change_scene_to_file("res://scenes/main_menu/main_menu.tscn")
 
 
 # Vide la file de generation AVANT de demonter le terrain, en affichant
@@ -245,6 +410,7 @@ func _unhandled_input(event: InputEvent) -> void:
 # meme attente devient une barre qui progresse. Le `free()` qui suit ne trouve
 # plus rien a attendre.
 func _announce_exit(message: String) -> void:
+	_leaving = true
 	set_process(false)
 	_exit_bar.visible = true
 	_exit_label.text = message
@@ -304,7 +470,7 @@ func _build_exit_bar() -> void:
 	_exit_bar.add_child(center)
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 14)
+	box.add_theme_constant_override("separation", IslandUI.SPACE_ROW)
 	center.add_child(box)
 
 	_exit_label = Label.new()
@@ -332,7 +498,14 @@ func _build_exit_bar() -> void:
 
 
 func _on_edit_refused(reason: String) -> void:
-	_message = reason
+	_notify(reason)
+
+
+# Message fugace dans la ligne d'etat. C'est le seul canal dont dispose la
+# partie pour dire quelque chose au joueur, et il sert autant au refus d'un
+# creusement qu'aux arrivees et departs sur le reseau.
+func _notify(text: String) -> void:
+	_message = text
 	_message_timer = MESSAGE_DURATION
 
 
@@ -348,14 +521,29 @@ func _process(delta: float) -> void:
 		status_label.text = _message
 		return
 	var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
-	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d" % [
+	status_label.text = "seed %d · %s · %d FPS · %s · %s · alt %d%s" % [
 		world_seed,
 		_sky.clock(),
 		Engine.get_frames_per_second(),
 		"vol" if player.flying else "marche",
 		map.biome_name(map.biome_at(cell.x, cell.z)),
 		int(player.position.y),
+		_company(),
 	]
+
+
+# Qui est la. RIEN NE LE DISAIT NULLE PART : on hebergeait une partie sans
+# jamais apprendre que quelqu'un l'avait rejointe, ni qu'il en etait reparti.
+#
+# En solo la mention disparait, plutot que d'afficher « 1 joueur » — un chiffre
+# qui ne varie jamais n'est pas une information, c'est du bruit dans une ligne
+# qui en a deja six.
+func _company() -> String:
+	# `Network.is_online()` et non `multiplayer.has_multiplayer_peer()`, qui rend
+	# vrai meme en solo — voir la note sur le pair hors ligne dans `network.gd`.
+	if not Network.is_online():
+		return ""
+	return " · %d joueurs" % Network.players.size()
 
 
 func _spawn_position() -> Vector3:
@@ -394,29 +582,52 @@ func _update_immersion() -> void:
 	if _cave_lamp != null:
 		_cave_lamp.light_energy = _sky.underground * CAVE_LAMP_ENERGY
 
-	# Deux eaux, deux tests.
-	#
-	# La mer tient a une seule altitude, donc « sous la mer » se decide en
-	# comparant a `SEA_LEVEL`. Une riviere, elle, descend de quarante metres :
-	# il faut lui demander SON altitude a CETTE colonne — ce que la nappe sait
-	# repondre, et qui est la raison pour laquelle elle garde son champ de
-	# niveau apres avoir bati son maillage.
-	var at_sea := eye.y < float(WorldMap.SEA_LEVEL) and column <= WorldMap.SEA_LEVEL
-	# ETRE SOUS LE NIVEAU DE L'EAU NE SUFFIT PAS, IL FAUT ETRE DEDANS.
-	#
-	# Une galerie passe des dizaines de metres sous une riviere : comparer la
-	# seule altitude y declenchait le voile bleu en pleine roche seche. La mer
-	# echappait au piege par accident — sa condition `column <= SEA_LEVEL`
-	# exclut toute colonne de terre ferme, donc toute grotte.
-	#
-	# On exige donc que l'oeil soit AU-DESSUS DU SOL de sa colonne : dans un
-	# chenal, le sol est le lit, et on y est bien ; sous terre, on est dessous.
-	var in_river := _river_splines != null \
-		and eye.y >= float(column) \
-		and eye.y < _river_splines.water_level_at(floori(eye.x), floori(eye.z))
-	var submerged := at_sea or in_river
+	var submerged := eye.y < _water_surface_at(eye)
 	_sky.underwater = 1.0 if submerged else 0.0
 	_water_veil.visible = submerged
+
+	# LA CAMERA NE SE MOUILLE PAS TOUTE SEULE.
+	#
+	# En vue d'epaule, l'objectif traine jusqu'a huit metres derriere le
+	# personnage : longer un chenal suffit a le faire passer sous la surface
+	# alors qu'on a les pieds sur la berge, et le voile bleu se declencherait
+	# la. On donne donc au rig l'altitude de l'eau sous le PERSONNAGE, et il
+	# maintient l'objectif au-dessus — sauf quand le personnage est lui-meme
+	# immerge, ou la camera doit bien le suivre sous l'eau.
+	#
+	# C'est ce qui permet au test ci-dessus de rester branche sur la seule
+	# camera, sans une ligne de plus.
+	var shoulder := player.global_position + Vector3.UP * PlayerCamera.PIVOT_Y
+	var surface := _water_surface_at(shoulder)
+	player.water_surface_y = -INF if shoulder.y < surface else surface
+
+
+# Altitude de la surface d'eau au-dessus de ce point, ou -INF s'il n'y en a
+# aucune.
+#
+# DEUX EAUX, UNE SEULE REPONSE. La mer tient a une seule altitude, donc « sous
+# la mer » se decide en comparant a `SEA_LEVEL`. Une riviere, elle, descend de
+# quarante metres : il faut lui demander SON altitude a CETTE colonne — ce que
+# la nappe sait repondre, et qui est la raison pour laquelle elle garde son
+# champ de niveau apres avoir bati son maillage.
+#
+# ETRE SOUS LE NIVEAU DE L'EAU NE SUFFIT PAS, IL FAUT ETRE DEDANS.
+#
+# Une galerie passe des dizaines de metres sous une riviere : comparer la seule
+# altitude y declenchait le voile bleu en pleine roche seche. La mer echappait
+# au piege par accident — sa condition `column <= SEA_LEVEL` exclut toute
+# colonne de terre ferme, donc toute grotte.
+#
+# On exige donc que le point soit AU-DESSUS DU SOL de sa colonne : dans un
+# chenal, le sol est le lit, et on y est bien ; sous terre, on est dessous.
+func _water_surface_at(point: Vector3) -> float:
+	var column := map.terrain_height(floori(point.x), floori(point.z))
+	if column <= WorldMap.SEA_LEVEL:
+		return float(WorldMap.SEA_LEVEL)
+	if _river_splines == null or point.y < float(column):
+		return -INF
+	var level := _river_splines.water_level_at(floori(point.x), floori(point.z))
+	return level if level > float(column) else -INF
 
 
 # Voile plein ecran de l'immersion. Repris de terrain-3d, qui n'a pas de shader

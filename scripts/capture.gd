@@ -56,6 +56,12 @@ func _capture(delay: float, out_path: String, pitch: float, yaw: float,
 	await process_frame
 	if spawn != "":
 		_place(scene_root, spawn)
+	# LE JOUEUR PILOTE SA CAMERA A CHAQUE IMAGE depuis qu'il est en vue
+	# d'epaule, et elle est en `top_level` : elle ne suit plus le corps toute
+	# seule. Sans debrancher le rig ici, il la reposerait quatre metres derriere
+	# la nuque du personnage juste apres `_aim`, et toutes les captures
+	# montreraient le meme dos.
+	_freeze_camera_rig(scene_root)
 	await create_timer(delay).timeout
 	# L'orientation est posee APRES l'attente : le joueur reprend la main sur sa
 	# camera des qu'il recoit une entree, et rien ne garantit qu'il n'ait pas
@@ -84,6 +90,17 @@ func _aim(pitch: float, yaw: float) -> void:
 		return
 	var camera := cameras[0] as Camera3D
 	camera.global_rotation = Vector3(deg_to_rad(pitch), deg_to_rad(yaw), 0.0)
+
+
+# Debranche le rig de camera, s'il y en a un.
+#
+# Teste par `has_method` plutot qu'en nommant la scene : cet outil accepte
+# n'importe quelle scene en argument, et il n'a pas a savoir laquelle a un
+# joueur en vue d'epaule.
+func _freeze_camera_rig(scene_root: Node) -> void:
+	for body in scene_root.find_children("*", "CharacterBody3D", true, false):
+		if body.has_method("freeze_camera_for_capture"):
+			body.call("freeze_camera_for_capture")
 
 
 # Deplace le joueur. La scene l'a deja pose dans son `_ready`, appele par
