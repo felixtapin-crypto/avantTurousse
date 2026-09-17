@@ -56,6 +56,27 @@ uniform vec3 foam_color : source_color = vec3(0.90, 0.95, 1.0);
 uniform float foam_depth = 1.3;        // épaisseur d'eau sous laquelle apparaît l'écume
 uniform float fresnel_power = 5.0;
 
+// --- Decoupe sur les terres emergees ---------------------------------------
+//
+// LE PLAN DE MER NE DOIT PAS EXISTER SOUS L'ILE.
+//
+// Il est pose a une seule altitude et s'etend bien au-dela de la carte, donc il
+// traverse tout ce que l'ile a de creux sous le niveau marin — et l'ile en a :
+// mesure sur une carte de 800, TREIZE SALLES DE GROTTE SUR VINGT-SIX etaient
+// coupees par ce plan, et 722 colonnes de terre ferme portaient une galerie qui
+// l'enjambe. On voyait donc une nappe d'eau au fond d'une grotte seche.
+//
+// Le masquer quand la camera est sous terre aurait cache le symptome ; le
+// supprimer la ou il n'a rien a faire supprime la cause. Le masque vaut 1 sur
+// les terres, et on y jette le fragment.
+//
+// `land_clip` reste a zero pour toute autre eau qui reutiliserait ce shader —
+// une riviere, elle, coule PAR DEFINITION sur les terres.
+uniform float land_clip = 0.0;
+uniform sampler2D land_mask : filter_linear;
+uniform vec2 land_origin = vec2(0.0);
+uniform float land_extent = 1.0;
+
 uniform sampler2D depth_tex : hint_depth_texture, filter_linear_mipmap;
 // Réfraction : la scène rendue DERRIÈRE l'eau (on l'échantillonne avec des UV décalés par la normale).
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
@@ -68,6 +89,16 @@ void vertex() {
 }
 
 void fragment() {
+	// Hors de l'eau : voir `land_clip`. En premier, pour ne rien calculer d'un
+	// fragment qu'on jette.
+	if (land_clip > 0.5) {
+		vec2 land_uv = (world_pos.xz - land_origin) / land_extent;
+		if (land_uv.x >= 0.0 && land_uv.x <= 1.0 && land_uv.y >= 0.0 && land_uv.y <= 1.0
+				&& texture(land_mask, land_uv).r > 0.5) {
+			discard;
+		}
+	}
+
 	// --- Normales animées (3 couches, dont une FINE pour casser le reflet des astres en
 	//     scintillement/glitter au lieu d'une traînée blanche continue) ---
 	vec2 uv = world_pos.xz * uv_scale;

@@ -607,7 +607,53 @@ func _check_river_splines(map: WorldMap) -> int:
 	print("\n--- emprise des rivieres ---")
 	var splines := RiverSplines.new()
 	splines.setup(map)
-	return _check_river_outlines(map, splines)
+	return _check_river_outlines(map, splines) + _check_caves_dry(map, splines)
+
+
+# AUCUNE GALERIE NE DOIT ATTEINDRE L'EAU D'UNE RIVIERE.
+#
+# Le projet interdit de tomber sur de l'eau en creusant, et on ne simule aucun
+# ecoulement : une galerie qui deboucherait sous une riviere se remplirait sans
+# que rien ne le dise, et le joueur s'y noierait dans une roche censee etre
+# seche.
+#
+# Le garde-fou des entrees ne suffisait pas et l'a prouve : il refusait une
+# bouche dont la COLONNE etait une riviere, mais une entree s'evase sur trois
+# metres et le plan d'eau deborde jusqu'au haut des berges. Une bouche ouverte
+# A COTE d'un chenal passait donc, et la galerie remontait 4,1 m AU-DESSUS du
+# niveau de la riviere voisine.
+func _check_caves_dry(map: WorldMap, splines: RiverSplines) -> int:
+	var closest := INF
+	var closest_at := Vector3i.ZERO
+	var flooded := 0
+
+	for z in range(0, map.size_xz, 2):
+		for x in range(0, map.size_xz, 2):
+			var water := splines.water_level_at(x, z)
+			if water == -INF:
+				continue
+			var capsules := map.cave_column(x, z)
+			if capsules.is_empty():
+				continue
+			# La bande d'altitudes que les capsules proches peuvent toucher :
+			# c'est le plafond de la galerie, rayon compris.
+			var gap := water - float(map.cave_y_bounds(capsules).y)
+			if gap < closest:
+				closest = gap
+				closest_at = Vector3i(x, map.cave_y_bounds(capsules).y, z)
+			if gap < 0.0:
+				flooded += 1
+
+	if closest == INF:
+		print("  aucune galerie ne passe sous une colonne en eau")
+		return 0
+	print("  galerie la plus proche de l'eau : %.1f m dessous, en %v"
+		% [closest, closest_at])
+	if flooded > 0:
+		printerr("  %d colonne(s) ou une galerie atteint l'eau d'une riviere"
+			% flooded)
+		return 1
+	return 0
 
 
 # Le contour des berges doit TOUCHER le terrain, etre ferme, et se tenir en
@@ -1159,14 +1205,41 @@ func _check_caves(map: WorldMap) -> int:
 	else:
 		print("  toutes les salles sont reliees a une entree")
 
-	# Aucune galerie ne doit passer sous la mer : on n'y simule aucun
-	# ecoulement, donc une breche noierait le reseau sans que rien ne le dise.
+	# Aucune salle ne doit s'ouvrir sous la MER, au sens du terrain : une
+	# galerie qui deboucherait sur le fond marin se remplirait sans qu'on
+	# simule le moindre ecoulement.
+	#
+	# Attention a ce que ce controle dit et ne dit pas. Il a longtemps teste
+	# `terrain_height(salle) <= SEA_LEVEL`, ce qui est TOUJOURS FAUX a
+	# l'interieur des terres — il ne pouvait donc rien attraper, et il passait.
+	# Pendant ce temps le plan de mer, pose a une seule altitude et etendu
+	# au-dela de la carte, traversait treize salles sur vingt-six sans que rien
+	# ne le signale. Une salle PEUT etre sous le niveau marin, c'est meme le cas
+	# de la moitie d'entre elles ; ce qui ne doit pas arriver, c'est qu'on y
+	# VOIE la mer — et cela se regle dans le shader, pas dans le placement (voir
+	# `land_clip` dans `sea.gdshader`).
 	var flooded := 0
+	var visible_sea := 0
 	for room in rooms:
-		if map.terrain_height(int(room.x), int(room.z)) <= WorldMap.SEA_LEVEL:
+		var x := int(room.x)
+		var z := int(room.z)
+		var ground := map.terrain_height(x, z)
+		if ground <= WorldMap.SEA_LEVEL:
 			flooded += 1
+			continue
+		# La salle plonge-t-elle sous le plan de mer LA OU CELUI-CI EST ENCORE
+		# DESSINE ? La decoupe garde la mer jusqu'a `Sea.LAND_MARGIN` au-dessus
+		# du niveau marin, pour ne pas trancher net a la ligne d'eau : une salle
+		# sous une colonne cotiere basse y verrait donc encore la mer.
+		if float(room.y) - room.w < float(WorldMap.SEA_LEVEL) \
+				and ground <= WorldMap.SEA_LEVEL + Sea.LAND_MARGIN:
+			visible_sea += 1
 	if flooded > 0:
-		printerr("  %d salle(s) sous le niveau de la mer" % flooded)
+		printerr("  %d salle(s) debouchent sous le fond marin" % flooded)
+		failures += 1
+	if visible_sea > 0:
+		printerr("  %d salle(s) sous une colonne ou le plan de mer est encore dessine"
+			% visible_sea)
 		failures += 1
 
 	# Ouverture reelle, mesuree dans les voxels produits par le generateur.

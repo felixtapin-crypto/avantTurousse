@@ -23,11 +23,19 @@ var _mesh: MeshInstance3D
 var _material: ShaderMaterial
 
 
-func setup(center: Vector3, sea_level: float) -> void:
+# Marge, en voxels, au-dessus du niveau marin avant de declarer une colonne
+# « terre ». Le plan de mer continue donc un peu SOUS la plage, ou il est de
+# toute facon enfoui : sans cette marge, la decoupe tomberait pile sur la ligne
+# d'eau et s'y verrait en trait net.
+const LAND_MARGIN := 2
+
+
+func setup(map: WorldMap) -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(EXTENT, EXTENT)
 
 	_material = build_material()
+	_clip_to_water(map)
 
 	_mesh = MeshInstance3D.new()
 	_mesh.name = "Surface"
@@ -43,7 +51,34 @@ func setup(center: Vector3, sea_level: float) -> void:
 	# pile a cette altitude, donc un plan exactement coplanaire avec elles se
 	# battrait avec le terrain sur toute leur etendue. Le decalage suffit a
 	# trancher, et l'ecume de rive masque la ligne de coupe.
-	position = Vector3(center.x, sea_level - 0.25, center.z)
+	var centre := float(map.size_xz) * 0.5
+	position = Vector3(centre, float(WorldMap.SEA_LEVEL) - 0.25, centre)
+
+
+# Decoupe le plan de mer sur les terres emergees : voir `land_clip` dans le
+# shader pour la raison, qui est une grotte percee d'une nappe d'eau.
+#
+# Le masque est construit en UN passage et pousse d'un bloc : `set_pixel` sur
+# 640 000 colonnes couterait plusieurs secondes, la ou un `PackedByteArray`
+# remis a `Image.create_from_data` se compte en fractions de seconde. C'est la
+# meme lecon que `map_render.gd`.
+func _clip_to_water(map: WorldMap) -> void:
+	var size := map.size_xz
+	var mask := PackedByteArray()
+	mask.resize(size * size)
+	var limit := WorldMap.SEA_LEVEL + LAND_MARGIN
+	var i := 0
+	for z in size:
+		for x in size:
+			mask[i] = 255 if map.terrain_height(x, z) > limit else 0
+			i += 1
+
+	var texture := ImageTexture.create_from_image(
+		Image.create_from_data(size, size, false, Image.FORMAT_R8, mask))
+	_material.set_shader_parameter("land_clip", 1.0)
+	_material.set_shader_parameter("land_mask", texture)
+	_material.set_shader_parameter("land_origin", Vector2.ZERO)
+	_material.set_shader_parameter("land_extent", float(size))
 
 
 # Valeurs reprises de `tools/water_bench.gd` et de la direction artistique de

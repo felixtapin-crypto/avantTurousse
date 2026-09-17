@@ -57,6 +57,13 @@ const FLOOR_MARGIN := 3
 # de tomber sur de l'eau en creusant, et une galerie qui deboucherait sur une
 # plage se remplirait sans qu'on simule le moindre ecoulement.
 const ENTRANCE_MIN_ALTITUDE := 8
+
+# Distance a tenir entre une bouche d'entree et la moindre colonne de riviere.
+#
+# Elle couvre l'evasement de l'entree et la largeur du plan d'eau, qui monte
+# jusqu'au haut des berges. En dessous, une entree ouverte au bord d'un chenal
+# debouche sous l'eau.
+const RIVER_CLEARANCE := 8
 const ENTRANCE_COUNT_MIN := 2
 const ENTRANCE_PER_ROOMS := 0.25
 
@@ -415,6 +422,18 @@ func _carve_tunnel(map, wander: FastNoiseLite,
 		previous = point
 
 
+# Une colonne de riviere se trouve-t-elle a portee ?
+#
+# `map` est volontairement non typee, comme partout dans ce fichier : le nommer
+# `WorldMap` formerait un cycle de classes, puisque c'est lui qui nous utilise.
+func _river_within(map, x: int, z: int, reach: int) -> bool:
+	for dz in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			if map.is_river(x + dx, z + dz):
+				return true
+	return false
+
+
 # Ramene un point sous le plafond de roche et au-dessus de la bedrock.
 func _clamp_underground(map, point: Vector3, radius: float) -> Vector3:
 	var x := clampi(int(round(point.x)), 0, map.size_xz - 1)
@@ -451,12 +470,18 @@ func _open_entrances(map, rng: RandomNumberGenerator,
 			var ground: int = map.terrain_height(x, z)
 			if ground <= _sea_level + ENTRANCE_MIN_ALTITUDE:
 				continue
-			# Jamais dans un lit de riviere. Le reseau est construit APRES le
-			# creusement des chenaux, donc rien n'empeche autrement une entree
-			# de s'ouvrir au fond de l'un d'eux — et le jour ou le lit portera
-			# de l'eau, elle noierait la galerie. C'est la meme regle que
-			# l'altitude minimale juste au-dessus, pour la meme raison.
-			if map.is_river(x, z):
+			# Jamais dans un lit de riviere NI A SON BORD.
+			#
+			# Le reseau est construit APRES le creusement des chenaux, donc
+			# rien n'empeche autrement une entree de s'ouvrir dans l'un d'eux —
+			# et la riviere porte maintenant de l'eau, qui noierait la galerie.
+			#
+			# Tester la seule colonne de la bouche ne suffisait pas : une entree
+			# s'evase sur ENTRANCE_RADIUS, et le plan d'eau deborde jusqu'au
+			# haut des berges. Une bouche posee A COTE d'un chenal ouvrait donc
+			# quand meme sous l'eau — mesure sur la carte de 800, une galerie
+			# remontant 4,1 m AU-DESSUS du niveau de la riviere voisine.
+			if _river_within(map, x, z, RIVER_CLEARANCE):
 				continue
 			var slope := maxf(
 				absf(float(map.terrain_height(x + 2, z) - map.terrain_height(x - 2, z))),

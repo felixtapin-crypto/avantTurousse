@@ -137,9 +137,7 @@ func _add_sea() -> void:
 	_sea = Sea.new()
 	_sea.name = "Sea"
 	add_child(_sea)
-	# Centre de la carte : le terrain occupe [0, map_size] en X et en Z.
-	var center := Vector3(float(map_size) * 0.5, 0.0, float(map_size) * 0.5)
-	_sea.setup(center, float(WorldMap.SEA_LEVEL))
+	_sea.setup(map)
 
 
 # Les rivieres sont une surface a part, et non le plan de `_add_sea` : une
@@ -404,7 +402,17 @@ func _update_immersion() -> void:
 	# repondre, et qui est la raison pour laquelle elle garde son champ de
 	# niveau apres avoir bati son maillage.
 	var at_sea := eye.y < float(WorldMap.SEA_LEVEL) and column <= WorldMap.SEA_LEVEL
+	# ETRE SOUS LE NIVEAU DE L'EAU NE SUFFIT PAS, IL FAUT ETRE DEDANS.
+	#
+	# Une galerie passe des dizaines de metres sous une riviere : comparer la
+	# seule altitude y declenchait le voile bleu en pleine roche seche. La mer
+	# echappait au piege par accident — sa condition `column <= SEA_LEVEL`
+	# exclut toute colonne de terre ferme, donc toute grotte.
+	#
+	# On exige donc que l'oeil soit AU-DESSUS DU SOL de sa colonne : dans un
+	# chenal, le sol est le lit, et on y est bien ; sous terre, on est dessous.
 	var in_river := _river_splines != null \
+		and eye.y >= float(column) \
 		and eye.y < _river_splines.water_level_at(floori(eye.x), floori(eye.z))
 	var submerged := at_sea or in_river
 	_sky.underwater = 1.0 if submerged else 0.0
