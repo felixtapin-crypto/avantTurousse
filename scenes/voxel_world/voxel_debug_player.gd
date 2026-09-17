@@ -285,6 +285,40 @@ func _edit(remove: bool) -> void:
 	voxel_tool.do_sphere(center, brush_radius)
 	carried += 1 if remove else -1
 
+	# UN DEPOT SORT DE TERRE, PAS D'HERBE.
+	#
+	# `do_sphere` en MODE_ADD ne touche que le canal SDF (la geometrie) : la
+	# matiere des voxels nouvellement solides reste a sa valeur par defaut, qui
+	# se trouve etre GRASS (index 0). Un peinturage explicite en
+	# MODE_TEXTURE_PAINT force la couche a DIRT juste apres le sculptage.
+	# Creuser n'a pas besoin de cette etape : la coupe expose la stratification
+	# deja posee par `TerrainGenerator` (terre puis roche en profondeur).
+	if not remove:
+		voxel_tool.mode = VoxelTool.MODE_TEXTURE_PAINT
+		voxel_tool.texture_index = TerrainGenerator.Layer.DIRT
+		voxel_tool.texture_opacity = 1.0
+		voxel_tool.do_sphere(center, brush_radius)
+		_regrow_grass(center, brush_radius)
+
+
+# Repousse de l'herbe sur un depot laisse a l'air libre, avec le temps.
+#
+# Duree a calibrer en playtest (voir `FarmPlot.GROWTH_DURATION` pour le meme
+# genre de reglage sur l'ancien prototype). Repeindre en herbe un depot qui
+# a ete recreuse entretemps ne fait rien de visible : sans matiere solide la,
+# le peinturage ne colore aucune surface.
+const GRASS_REGROWTH_SECONDS := 60.0
+
+
+func _regrow_grass(center: Vector3, radius: float) -> void:
+	await get_tree().create_timer(GRASS_REGROWTH_SECONDS).timeout
+	if voxel_tool == null:
+		return
+	voxel_tool.mode = VoxelTool.MODE_TEXTURE_PAINT
+	voxel_tool.texture_index = TerrainGenerator.Layer.GRASS
+	voxel_tool.texture_opacity = 1.0
+	voxel_tool.do_sphere(center, radius)
+
 
 # ===========================================================================
 # SILHOUETTE — PROVISOIRE, A SUPPRIMER
