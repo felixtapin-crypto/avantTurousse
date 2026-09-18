@@ -86,7 +86,7 @@ func join_game(address: String) -> void:
 
 
 func leave_game() -> void:
-	multiplayer.multiplayer_peer = null
+	_reset_peer()
 	_online = false
 	players.clear()
 	world_ready = false
@@ -177,14 +177,29 @@ func _on_connected_ok() -> void:
 
 
 func _on_connected_fail() -> void:
-	multiplayer.multiplayer_peer = null
+	_reset_peer()
 	_online = false
 	connection_failed.emit()
 
 
 func _on_server_disconnected() -> void:
-	multiplayer.multiplayer_peer = null
+	_reset_peer()
 	_online = false
 	world_ready = false
 	players.clear()
 	server_disconnected.emit()
+
+
+# Remet le pair hors ligne A L'IMPLICITE, pas a rien.
+#
+# `multiplayer.multiplayer_peer = null` semblait le geste naturel, mais il
+# retire jusqu'au pair hors ligne que Godot installe par defaut (voir la note
+# sur `_online` plus haut) : `get_unique_id()` se met a lever une erreur et
+# rendre 0, `is_server()` tombe a faux, et tout ce qui s'y fie casse en
+# silence pour le joueur SOLO qui repasse par cet ecran — `is_multiplayer_authority()`
+# de son propre personnage devient faux, et `smooth_voxel_world._attach_player`
+# ne l'attache jamais (constate en jeu : ecran gris, "Entree dans le monde"
+# fige). `OfflineMultiplayerPeer` est le pair prevu par Godot pour ce cas :
+# `unique_id`=1, `is_server()`=vrai, sans ouvrir le moindre socket.
+func _reset_peer() -> void:
+	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
