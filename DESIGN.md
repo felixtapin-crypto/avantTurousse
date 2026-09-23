@@ -242,11 +242,20 @@ paramétrable (position, objet requis, texte d'indice). À chaque partie :
 - **Le message à décrypter** : une carte fragmentaire ou un texte à
   reconstituer à partir de 2-3 fragments trouvés séparément (pousse à
   explorer plusieurs zones avant de pouvoir agir).
-- **Le carnet du gardien** : un journal ou une gravure qui ne donne pas un
-  lieu mais un indice sur le **régime alimentaire du dragon** de cette
-  partie (ex. "les anciens nourrissaient leurs dragons de poisson et de
-  baies, jamais de viande"). Peut apparaître à n'importe quel maillon de la
-  chaîne, pas seulement à la fin.
+- **Le carnet du gardien / les histoires de l'île** (généralisé le
+  2026-09-23, sur demande explicite) : un journal, une gravure ou une lettre
+  d'un habitant passé de l'île — PAS un gabarit à part, mais une VARIANTE de
+  gabarit qui peut remplacer n'importe quel maillon de la chaîne principale
+  vers l'œuf, pas seulement un extra optionnel. Sa récompense reste le même
+  contrat que tout gabarit (indice vers le maillon suivant), mais racontée
+  a travers une petite histoire personnelle plutôt qu'un indice sec ("Elara
+  a niché son coffre là où la lumière du matin frappe la roche en premier"
+  plutôt que "creuser à l'est de la falaise"). Certains peuvent aussi donner
+  un indice sur le **régime alimentaire du dragon** plutôt qu'un lieu (ex.
+  "les anciens nourrissaient leurs dragons de poisson et de baies, jamais de
+  viande"), toujours en plus de faire avancer la chaîne, pas à la place.
+  Plusieurs personnages/histoires distincts par partie (2-3), pour que
+  l'île ait plusieurs voix plutôt qu'un seul narrateur omniscient.
 - **L'horloge (à trouver ou à fabriquer)** : tant qu'on ne l'a pas, les
   joueurs n'ont aucune indication fiable de l'heure — seulement ce qu'ils
   voient à l'œil (position du soleil, luminosité). La trouver (une montre
@@ -275,6 +284,65 @@ génération doit aussi produire une petite liste de "repères" identifiables
 principal, etc.) avec un nom/description, réutilisables par n'importe quel
 gabarit d'indice. C'est ce qui permet d'écrire des indices qui restent
 cohérents sans être écrits à la main pour chaque partie.
+
+### Principe technique : moteur de gabarits, chaîne et réseau
+
+Rien de cette section n'existe encore dans `scenes/voxel_world/` (le jeu
+actif) — écrit avant la reconstruction du moteur voxel (PR #44), jamais
+porté depuis. Ce qui suit formalise COMMENT construire ce qui précède sur
+la base actuelle, pas un changement de direction. Portée de cette passe :
+le moteur de gabarits + la chaîne d'indices + les repères nommés
+(issues #12/#13) — PAS l'œuf/éclosion/élevage/dressage (issue #14, un
+système à part, voir "Portée et étapes proposées").
+
+- **Repères nommés = nouveau calcul, rien d'existant à réutiliser.**
+  `WorldMap` expose déjà tout le nécessaire COLONNE PAR COLONNE
+  (`terrain_height`, `biome_at`, `flow_at`, `slope_at`...) mais rien qui
+  réponde à "où est le point le plus haut" — seul `height_range()` donne un
+  min/max global, pas une position. Un passage dédié (nouveau fichier,
+  `Landmarks`, même esprit que `TerrainGenerator`) échantillonne la carte à
+  la génération (grille grossière, pas voxel par voxel — le meme
+  compromis cout/precision que `_scatter_items`) pour en tirer une poignée
+  de points nommés : sommet le plus haut, embouchure de la plus grosse
+  riviere (`flow_at` au maximum), cœur d'un biome dominant, etc. Deterministe
+  a partir de la graine, comme le reste de la generation.
+- **Gabarits = donnees + comportement, pas une hierarchie de classes.**
+  Un type par MECANIQUE DE RESOLUTION (pas un script par gabarit narratif) :
+  un maillon est un enregistrement (position/repere cible, type, objet(s)
+  requis, texte d'indice) dont la condition de reussite se lit par type,
+  meme esprit que `TerrainGenerator.Layer`/`ItemCatalog` (enum + table),
+  pas une sous-classe par gabarit. Types couverts par cette premiere passe,
+  choisis parce qu'ils ne demandent AUCUNE mecanique qui n'existe pas deja :
+  - **Creuser au repere** ("le coffre enterre") : `_apply_terrain_edit`
+    (dans `smooth_voxel_world.gd`, deja le point de passage AUTORITAIRE de
+    tout creusement accepte, cote hote comme cote client en avance locale)
+    compare `center` a la position du repere vise.
+  - **Fragments a rassembler** ("le message a dechiffrer") : meme moule
+    qu'`ItemPickup`, K instances liees au meme maillon, complet quand les K
+    sont ramassees.
+  - **Carnet/histoire** (voir plus haut) : un `ItemPickup` dont la
+    "recompense" est un TEXTE (l'indice suivant, eventuellement le regime du
+    dragon) plutot qu'un objet physique.
+  Hors scope cette passe, faute de la mecanique sous-jacente : tronc a
+  bruler (pas de feu), nid en hauteur (pas de construction), cache immergee
+  (pas de drainage), grotte scellee (sequence a part entiere) — a ajouter au
+  catalogue de types le jour ou leur mecanique existe, sans revoir
+  l'architecture.
+- **La chaine est un etat PARTAGE, comme les pickups — pas comme
+  l'inventaire.** `DESIGN.md` est explicite (voir "Pitch") : la quete est
+  "partagee... ils voient et font progresser la meme histoire". Ca exclut le
+  modele "local par joueur" deja utilise pour `Inventory`/`SurvivalGauges` :
+  il faut le meme schema que `request_pickup`/`_taken`/
+  `_set_taken_pickups` deja en place pour les objets au sol (l'hote arbitre,
+  diffuse aux deux, rattrape un arrivant tardif) — pas une architecture
+  reseau nouvelle, la meme etendue a un etat "maillon i resolu" au lieu de
+  "objet i ramasse".
+- **Indice = nouveau canal d'affichage, pas le message fugace existant.**
+  `_notify`/`_message_timer` (2,5 s, un seul a la fois) suffit a un refus de
+  creusement, pas a un indice qu'on doit pouvoir relire dix minutes plus
+  tard. Journal de quete a construire (nouvel ecran, meme famille que
+  `InventoryScreen`, `ScrollContainer` comme dans `settings_screen.gd`)
+  plutot que de forcer l'indice dans le canal fugace.
 
 ### L'œuf, l'éclosion, l'élevage
 
