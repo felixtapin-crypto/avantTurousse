@@ -10,12 +10,14 @@ enum Id {
 	DIRT = 0,
 	ROCK = 1,
 	BACKPACK = 2,
+	BERRY = 3,
 }
 
 const NAME := {
 	Id.DIRT: "terre",
 	Id.ROCK: "caillou",
 	Id.BACKPACK: "sac a dos",
+	Id.BERRY: "baie",
 }
 
 # DIRT reprend exactement l'ancien CARRY_CAPACITY (8, deja calibre par la PR
@@ -26,6 +28,7 @@ const MAX_STACK := {
 	Id.DIRT: 8,
 	Id.ROCK: 12,
 	Id.BACKPACK: 1,
+	Id.BERRY: 8,
 }
 
 # Pas d'icone : meme convention que `terrain_materials.gd`, un aplat de
@@ -36,6 +39,16 @@ const COLOR := {
 	Id.DIRT: TerrainMaterials.COLOR[TerrainMaterials.Type.DIRT],
 	Id.ROCK: TerrainMaterials.COLOR[TerrainMaterials.Type.STONE],
 	Id.BACKPACK: Color(0.55, 0.35, 0.18),
+	Id.BERRY: Color(0.62, 0.08, 0.20),
+}
+
+# Objets COMESTIBLES : combien de faim ils restaurent (sur 100). Seule la
+# baie existe pour l'instant - cueillette sauvage directe, voir DESIGN.md
+# ("Flore et faune", "la source de nourriture de base, toujours disponible").
+# Le jardinage (semer/arroser/recolter) est un systeme plus large, deja suivi
+# a part (issues #20-24/#28) et hors scope de cette passe.
+const HUNGER_RESTORE := {
+	Id.BERRY: 25.0,
 }
 
 # Objets d'EQUIPEMENT : quel emplacement ils occupent une fois equipes, et le
@@ -81,3 +94,11 @@ static func equip_slot(item_id: int) -> String:
 
 static func capacity_bonus(item_id: int) -> int:
 	return CAPACITY_BONUS.get(item_id, 0)
+
+
+static func is_food(item_id: int) -> bool:
+	return HUNGER_RESTORE.has(item_id)
+
+
+static func hunger_restore(item_id: int) -> float:
+	return HUNGER_RESTORE.get(item_id, 0.0)
