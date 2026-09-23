@@ -43,6 +43,7 @@ var _pause_menu: PauseMenu
 var _settings_screen: SettingsScreen
 var _crosshair: Crosshair
 var _hotbar: Hotbar
+var _survival_bars: SurvivalBars
 var _inventory_screen: InventoryScreen
 var _viewer: VoxelViewer
 # Provisoire : voir la section LAMPE DE GROTTE en bas de fichier.
@@ -93,6 +94,7 @@ func _ready() -> void:
 	_build_water_veil()
 	_build_crosshair()
 	_build_hotbar()
+	_build_survival_bars()
 	_build_inventory_screen()
 	_build_pause_menu()
 	_build_exit_bar()
@@ -522,6 +524,12 @@ func _build_hotbar() -> void:
 	$Hud.add_child(_hotbar)
 
 
+func _build_survival_bars() -> void:
+	_survival_bars = SurvivalBars.new()
+	_survival_bars.name = "SurvivalBars"
+	$Hud.add_child(_survival_bars)
+
+
 func _build_inventory_screen() -> void:
 	_inventory_screen = InventoryScreen.new()
 	_inventory_screen.name = "InventoryScreen"
@@ -582,6 +590,7 @@ func _open_pause() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_crosshair.visible = false
 	_hotbar.visible = false
+	_survival_bars.visible = false
 	_pause_menu.visible = true
 	get_tree().paused = true
 
@@ -595,6 +604,7 @@ func _close_pause() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_crosshair.visible = true
 	_hotbar.visible = true
+	_survival_bars.visible = true
 
 
 func _open_settings() -> void:
@@ -1117,6 +1127,7 @@ func _process(delta: float) -> void:
 		_company(),
 	]
 	_hotbar.refresh(_local_player.inventory)
+	_survival_bars.refresh(_local_player.survival)
 
 
 # Qui est la. RIEN NE LE DISAIT NULLE PART : on hebergeait une partie sans
@@ -1163,17 +1174,27 @@ const ROCK_SCATTER_RADIUS := 100.0
 # portee raisonnable d'une exploration.
 const BACKPACK_SCATTER_RADIUS := 180.0
 
+# Les baies sont la "source de nourriture de base, toujours disponible" de
+# DESIGN.md (section "Flore et faune") : plus nombreuses et plus proches que
+# les cailloux, pour qu'on en croise sans avoir a les chercher expres - la
+# faim, elle, ne laisse pas le choix du moment.
+const BERRY_COUNT := 25
+const BERRY_SCATTER_RADIUS := 80.0
+
 
 # Seed FIXE (derivee de `world_seed`, pas de `randi()`) pour que la
 # dispersion reste identique d'une partie a l'autre sur la meme graine -
-# testable, et coherente entre pairs le jour ou ce sera reseaute (voir
-# `_scatter_items`).
+# testable, et coherente entre pairs (le rang de chaque objet, voir
+# `_spawn_pickup_near_spawn`, ne veut dire la meme chose partout que si
+# l'ordre d'appel est identique chez tous).
 func _scatter_items() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = world_seed + 5000
 
 	for _i in ROCK_COUNT:
 		_spawn_pickup_near_spawn(rng, ItemCatalog.Id.ROCK, ROCK_SCATTER_RADIUS)
+	for _i in BERRY_COUNT:
+		_spawn_pickup_near_spawn(rng, ItemCatalog.Id.BERRY, BERRY_SCATTER_RADIUS)
 	_spawn_pickup_near_spawn(rng, ItemCatalog.Id.BACKPACK, BACKPACK_SCATTER_RADIUS)
 
 
@@ -1234,7 +1255,7 @@ func _update_immersion() -> void:
 	if _cave_lamp != null:
 		_cave_lamp.light_energy = _sky.underground * CAVE_LAMP_ENERGY
 
-	var submerged := eye.y < _water_surface_at(eye)
+	var submerged := eye.y < water_surface_at(eye)
 	_sky.underwater = 1.0 if submerged else 0.0
 	_water_veil.visible = submerged
 
@@ -1250,7 +1271,7 @@ func _update_immersion() -> void:
 	# C'est ce qui permet au test ci-dessus de rester branche sur la seule
 	# camera, sans une ligne de plus.
 	var shoulder := _local_player.global_position + Vector3.UP * PlayerCamera.PIVOT_Y
-	var surface := _water_surface_at(shoulder)
+	var surface := water_surface_at(shoulder)
 	_local_player.water_surface_y = -INF if shoulder.y < surface else surface
 
 
@@ -1272,7 +1293,10 @@ func _update_immersion() -> void:
 #
 # On exige donc que le point soit AU-DESSUS DU SOL de sa colonne : dans un
 # chenal, le sol est le lit, et on y est bien ; sous terre, on est dessous.
-func _water_surface_at(point: Vector3) -> float:
+#
+# Publique : `VoxelDebugPlayer` s'en sert aussi pour savoir s'il peut boire
+# (voir `_consume`), meme lecture que celle qui decide du voile d'immersion.
+func water_surface_at(point: Vector3) -> float:
 	var column := map.terrain_height(floori(point.x), floori(point.z))
 	if column <= WorldMap.SEA_LEVEL:
 		return float(WorldMap.SEA_LEVEL)

@@ -70,6 +70,9 @@ var brush_radius := 2.5
 # reellement retire donne directement le meme repere des deux cotes.
 var inventory := Inventory.new()
 
+# Purement local, comme `inventory` : voir `SurvivalGauges`.
+var survival := SurvivalGauges.new()
+
 var flying := true
 
 # Altitude de la surface d'eau sous le joueur, -INF s'il n'y en a pas. Ecrite
@@ -204,6 +207,7 @@ func freeze_camera_for_capture() -> void:
 
 
 func _process(delta: float) -> void:
+	survival.update(delta)
 	if not camera_rig_active:
 		return
 	_rig.update(delta, self, camera, water_surface_y)
@@ -238,6 +242,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event.is_action_pressed("toggle_inventory") and not event.is_echo():
 		inventory_toggle_requested.emit()
+		return
+
+	if event.is_action_pressed("consume") and not event.is_echo():
+		_consume()
 		return
 
 	# Selection de case LUE EN DUR (comme la molette pour le zoom camera, voir
@@ -421,6 +429,28 @@ func _edit(remove: bool) -> void:
 		inventory.add(ItemCatalog.Id.DIRT, 1)
 	else:
 		inventory.remove(ItemCatalog.Id.DIRT, 1)
+
+
+# Boire ou manger, sur une seule touche ("consume") : L'EAU PASSE D'ABORD.
+#
+# Se tenir dans l'eau prime sur la case active, parce que c'est une
+# circonstance (on y est ou on n'y est pas), la ou l'objet en main est un
+# choix qui reste vrai un peu partout. Quelqu'un qui patauge en tenant une
+# baie veut presque toujours boire, pas la manger — et peut toujours viser
+# la baie apres etre sorti de l'eau.
+func _consume() -> void:
+	if world != null and world.water_surface_at(global_position) > global_position.y:
+		survival.drink()
+		return
+
+	var slot = inventory.get_slot(inventory.active_slot)
+	if slot == null or not ItemCatalog.is_food(slot["item"]):
+		edit_refused.emit("Rien a boire ou manger ici.")
+		return
+
+	var item_id: int = slot["item"]
+	inventory.remove(item_id, 1)
+	survival.eat(item_id)
 
 
 # ===========================================================================
